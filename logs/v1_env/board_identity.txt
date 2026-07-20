@@ -1,0 +1,171 @@
+
+================================================================================
+Board identity evidence
+================================================================================
+
+--- Device Tree model ---
+PATH: /proc/device-tree/model
+ATK-DLRK3588 Board
+
+--- Device Tree compatible list ---
+PATH: /proc/device-tree/compatible
+rockchip,rk3588-evb7-lp4-v10
+rockchip,rk3588
+
+--- Device Tree serial-number ---
+PATH: /proc/device-tree/serial-number
+770657b44c23be5a
+
+--- Kernel hostname ---
+PATH: /proc/sys/kernel/hostname
+ATK-DLRK3588
+
+
+--- Kernel command line ---
+PATH: /proc/cmdline
+storagemedia=emmc androidboot.storagemedia=emmc androidboot.mode=normal  androidboot.verifiedbootstate=orange rw rootwait earlycon=uart8250,mmio32,0xfeb50000 console=ttyFIQ0 irqchip.gicv3_pseudo_nmi=0 root=PARTUUID=614e0000-0000
+
+
+--- uname -a ---
+$ uname -a
+Linux ATK-DLRK3588 5.10.160 #1 SMP Tue Oct 21 14:42:25 CST 2025 aarch64 GNU/Linux
+[EXIT] 0
+
+--- Board/SoC evidence filtered from dmesg ---
+[    1.628044] Machine model: ATK-DLRK3588 Board
+[    2.194462] rockchip-gpio fd8a0000.gpio: probed /pinctrl/gpio@fd8a0000
+[    2.195216] rockchip-gpio fec20000.gpio: probed /pinctrl/gpio@fec20000
+[    2.195945] rockchip-gpio fec30000.gpio: probed /pinctrl/gpio@fec30000
+[    2.196673] rockchip-gpio fec40000.gpio: probed /pinctrl/gpio@fec40000
+[    2.197427] rockchip-gpio fec50000.gpio: probed /pinctrl/gpio@fec50000
+[    2.198044] rockchip-pinctrl pinctrl: probed pinctrl
+[    2.216916] arm-scmi firmware:scmi: SCMI Protocol v2.0 'rockchip:' Firmware version 0x0
+[    2.219171] rockchip-cpuinfo cpuinfo: SoC		: 35881000
+[    2.219175] rockchip-cpuinfo cpuinfo: Serial		: 770657b44c23be5a
+[    2.466377] rockchip-thermal fec00000.tsadc: Missing rockchip,grf property
+[    2.466747] rockchip-thermal fec00000.tsadc: tsadc is probed successfully!
+[    2.491160] rockchip-csi2-dphy-hw fedc0000.csi2-dphy0-hw: csi2 dphy hw probe successfully!
+[    2.491214] rockchip-csi2-dphy-hw fedc8000.csi2-dphy1-hw: csi2 dphy hw probe successfully!
+[    2.497266] rockchip-hdptx-phy-hdmi fed60000.hdmiphy: hdptx phy init success
+[    2.497796] rockchip-hdptx-phy-hdmi fed70000.hdmiphy: hdptx phy init success
+[    2.500265] mpp_service mpp-srv: f421f8a9774d author: Yandong Lin 2023-09-21 video: rockchip: mpp: rkvenc2: fix slice mode poll failed
+[    2.514947] rockchip-pvtm fda40000.pvtm: pvtm@0 probed
+[    2.514983] rockchip-pvtm fda50000.pvtm: pvtm@1 probed
+[    2.515017] rockchip-pvtm fda60000.pvtm: pvtm@2 probed
+[    2.515051] rockchip-pvtm fdaf0000.pvtm: pvtm@3 probed
+[    2.515083] rockchip-pvtm fdb30000.pvtm: pvtm@4 probed
+[    2.515481] rockchip-system-monitor rockchip-system-monitor: system monitor probe
+[    2.518089] rockchip-vop2 fdd90000.vop: Adding to iommu group 17
+[    2.524883] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp0 assign plane mask: 0x5, primary plane phy id: 2
+[    2.524891] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp1 assign plane mask: 0xa, primary plane phy id: 3
+[    2.524897] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp2 assign plane mask: 0x140, primary plane phy id: 8
+[    2.524902] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp3 assign plane mask: 0x280, primary plane phy id: 9
+[    2.532332] rockchip-drm display-subsystem: bound fdd90000.vop (ops 0xffffffc00932d4a0)
+[    2.532651] dwhdmi-rockchip fde80000.hdmi: registered ddc I2C bus driver
+[    2.532931] rockchip-drm display-subsystem: bound fde80000.hdmi (ops 0xffffffc00933c030)
+[    2.533183] dwhdmi-rockchip fdea0000.hdmi: registered ddc I2C bus driver
+[    2.533438] rockchip-drm display-subsystem: bound fdea0000.hdmi (ops 0xffffffc00933c030)
+[    2.544826] rockchip-spi feb20000.spi: no high_speed pinctrl state
+[    2.558335] rockchip-spi feb20000.spi: probed, poll=0, rsd=0, cs-inactive=0, ready=0
+[    4.436502] rockchip-mipi-csi2-hw fdd10000.mipi0-csi2-hw: enter mipi csi2 hw probe!
+[    4.436566] rockchip-mipi-csi2-hw fdd10000.mipi0-csi2-hw: probe success, v4l2_dev:mipi0-csi2-hw!
+[    4.436591] rockchip-mipi-csi2-hw fdd20000.mipi1-csi2-hw: enter mipi csi2 hw probe!
+[    4.436630] rockchip-mipi-csi2-hw fdd20000.mipi1-csi2-hw: probe success, v4l2_dev:mipi1-csi2-hw!
+[    4.436651] rockchip-mipi-csi2-hw fdd30000.mipi2-csi2-hw: enter mipi csi2 hw probe!
+[    4.436688] rockchip-mipi-csi2-hw fdd30000.mipi2-csi2-hw: probe success, v4l2_dev:mipi2-csi2-hw!
+[    4.436709] rockchip-mipi-csi2-hw fdd40000.mipi3-csi2-hw: enter mipi csi2 hw probe!
+[    4.436745] rockchip-mipi-csi2-hw fdd40000.mipi3-csi2-hw: probe success, v4l2_dev:mipi3-csi2-hw!
+[    4.436767] rockchip-mipi-csi2-hw fdd50000.mipi4-csi2-hw: enter mipi csi2 hw probe!
+[    4.436806] rockchip-mipi-csi2-hw fdd50000.mipi4-csi2-hw: probe success, v4l2_dev:mipi4-csi2-hw!
+[    4.436826] rockchip-mipi-csi2-hw fdd60000.mipi5-csi2-hw: enter mipi csi2 hw probe!
+[    4.436862] rockchip-mipi-csi2-hw fdd60000.mipi5-csi2-hw: probe success, v4l2_dev:mipi5-csi2-hw!
+[    4.437215] rockchip-mipi-csi2 mipi0-csi2: attach to csi2 hw node
+[    4.437233] rkcif rkcif-mipi-lvds: Entity type for entity rockchip-mipi-csi2 was not initialized!
+[    4.437239] rockchip-mipi-csi2: Async registered subdev
+[    4.437243] rockchip-mipi-csi2: probe success, v4l2_dev:rkcif-mipi-lvds!
+[    4.437347] rockchip-mipi-csi2 mipi2-csi2: attach to csi2 hw node
+[    4.437361] rkcif rkcif-mipi-lvds2: Entity type for entity rockchip-mipi-csi2 was not initialized!
+[    4.437366] rockchip-mipi-csi2: Async registered subdev
+[    4.437369] rockchip-mipi-csi2: probe success, v4l2_dev:rkcif-mipi-lvds2!
+[    4.438181] rkisp_hw fdcb0000.rkisp: Missing rockchip,grf property
+[    4.438513] rkisp_hw fdcc0000.rkisp: Missing rockchip,grf property
+[    4.500325] dwmmc_rockchip fe2c0000.mmc: No normal pinctrl state
+[    4.500335] dwmmc_rockchip fe2c0000.mmc: No idle pinctrl state
+[    4.500481] dwmmc_rockchip fe2c0000.mmc: IDMAC supports 32-bit address mode.
+[    4.500503] dwmmc_rockchip fe2c0000.mmc: Using internal DMA controller.
+[    4.500514] dwmmc_rockchip fe2c0000.mmc: Version ID is 270a
+[    4.500548] dwmmc_rockchip fe2c0000.mmc: DW MMC controller at irq 94,32 bit host data width,256 deep fifo
+[    4.502816] dwmmc_rockchip fe2c0000.mmc: Failed getting OCR mask: -22
+[    4.506950] dwmmc_rockchip fe2c0000.mmc: could not set regulator OCR (-22)
+[    4.506967] dwmmc_rockchip fe2c0000.mmc: failed to enable vmmc regulator
+[    4.527924] rockchip-i2s-tdm fddf0000.i2s: CLK-ALWAYS-ON: mclk: 12288000, bclk: 3072000, fsync: 48000
+[    4.531730] rockchip-i2s-tdm fddf4000.i2s: CLK-ALWAYS-ON: mclk: 12288000, bclk: 3072000, fsync: 48000
+[    4.534771] input: rockchip-dp0 rockchip-dp0 as /devices/platform/dp0-sound/sound/card0/input2
+[    4.535664] input: rockchip-dp1 rockchip-dp1 as /devices/platform/dp1-sound/sound/card1/input3
+[    4.547893] input: rockchip,hdmiin rockchip,hdmiin as /devices/platform/hdmiin-sound/sound/card2/input4
+[    4.561809] ES8323 7-0011: ASoC: error at soc_component_write_no_lock on ES8323.7-0011: -5
+[    4.611009] input: rockchip-es8388 Headset as /devices/platform/es8388-sound/sound/card3/input6
+[    4.613888] [WLAN_RFKILL]: can't find rockchip,grf property
+[    4.849579] rockchip-dmc dmc: bin=0
+[    4.849758] rockchip-dmc dmc: leakage=40
+[    4.849771] rockchip-dmc dmc: leakage-volt-sel=1
+[    4.849785] rockchip-dmc dmc: soc version=0, speed=1
+[    4.850625] rockchip-dmc dmc: avs=0
+[    4.850642] rockchip-dmc dmc: current ATF version 0x100
+[    4.850835] rockchip-dmc dmc: normal_rate = 1068000000
+[    4.850844] rockchip-dmc dmc: reboot_rate = 1560000000
+[    4.850851] rockchip-dmc dmc: suspend_rate = 528000000
+[    4.850859] rockchip-dmc dmc: video_4k_rate = 1068000000
+[    4.850866] rockchip-dmc dmc: video_4k_10b_rate = 1068000000
+[    4.850874] rockchip-dmc dmc: video_svep_rate = 1068000000
+[    4.850881] rockchip-dmc dmc: boost_rate = 1560000000
+[    4.850888] rockchip-dmc dmc: fixed_rate(isp|cif0|cif1|dualview) = 1560000000
+[    4.850895] rockchip-dmc dmc: performance_rate = 1560000000
+[    4.850903] rockchip-dmc dmc: hdmirx_rate = 1560000000
+[    4.850913] rockchip-dmc dmc: failed to get vop bandwidth to dmc rate
+[    4.850919] rockchip-dmc dmc: failed to get vop pn to msch rl
+[    4.851030] rockchip-dmc dmc: l=10000 h=2147483647 hyst=5000 l_limit=0 h_limit=0 h_table=0
+[    4.851933] rockchip-dmc dmc: could not find power_model node
+[    4.860287] rockchip-csi2-dphy csi2-dcphy0: csi2 dphy0 probe successfully!
+[    4.860634] rockchip-csi2-dphy csi2-dphy0: csi2 dphy0 probe successfully!
+[    4.866449] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp0 assign plane mask: 0x5, primary plane phy id: 2
+[    4.866482] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp1 assign plane mask: 0xa, primary plane phy id: 3
+[    4.866494] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp2 assign plane mask: 0x140, primary plane phy id: 8
+[    4.866505] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp3 assign plane mask: 0x280, primary plane phy id: 9
+[    4.888364] rockchip-drm display-subsystem: bound fdd90000.vop (ops 0xffffffc00932d4a0)
+[    4.889872] dwhdmi-rockchip fde80000.hdmi: registered ddc I2C bus driver
+[    4.891265] rockchip-drm display-subsystem: bound fde80000.hdmi (ops 0xffffffc00933c030)
+[    4.892503] dwhdmi-rockchip fdea0000.hdmi: registered ddc I2C bus driver
+[    4.893708] rockchip-drm display-subsystem: bound fdea0000.hdmi (ops 0xffffffc00933c030)
+[    4.893775] rockchip-drm display-subsystem: bound fde20000.dsi (ops 0xffffffc00933e848)
+[    4.893858] rockchip-drm display-subsystem: bound fde50000.dp (ops 0xffffffc00933ebd8)
+[    4.893923] rockchip-drm display-subsystem: bound fde60000.dp (ops 0xffffffc00933ebd8)
+[    4.897195] rockchip-drm display-subsystem: route-hdmi0: failed to get logo,offset
+[    4.897205] rockchip-drm display-subsystem: route-hdmi1: failed to get logo,offset
+[    4.919226] rockchip-drm display-subsystem: [drm] fb0: rockchipdrmfb frame buffer device
+[    4.920249] [drm] Initialized rockchip 3.0.0 20140818 for display-subsystem on minor 0
+[    4.922478] input: rockchip-hdmi0 rockchip-hdmi0 as /devices/platform/hdmi0-sound/sound/card4/input9
+[    4.923689] input: rockchip-hdmi1 rockchip-hdmi1 as /devices/platform/hdmi1-sound/sound/card5/input10
+[    5.284125] rockchip-pm rockchip-suspend: not set pwm-regulator-config
+[    5.284843] rockchip-suspend not set sleep-mode-config for mem-lite
+[    5.284852] rockchip-suspend not set wakeup-config for mem-lite
+[    5.284861] rockchip-suspend not set sleep-mode-config for mem-ultra
+[    5.284868] rockchip-suspend not set wakeup-config for mem-ultra
+[    5.286653]   #0: rockchip-dp0
+[    5.286660]   #1: rockchip-dp1
+[    5.286666]   #2: rockchip,hdmiin
+[    5.286672]   #3: rockchip-es8388
+[    5.286679]   #4: rockchip-hdmi0
+[    5.286686]   #5: rockchip-hdmi1
+[    7.789696] hdmi-audio-codec hdmi-audio-codec.6.auto: ASoC: error at snd_soc_dai_startup on i2s-hifi: -19
+[    7.801846] hdmi-audio-codec hdmi-audio-codec.6.auto: ASoC: error at snd_soc_dai_startup on i2s-hifi: -19
+[    7.813782] hdmi-audio-codec hdmi-audio-codec.6.auto: ASoC: error at snd_soc_dai_startup on i2s-hifi: -19
+
+--- Candidate board identity files (bounded) ---
+/sys/firmware/devicetree/base/model: ATK-DLRK3588 Board 
+/sys/firmware/devicetree/base/compatible: rockchip,rk3588-evb7-lp4-v10 rockchip,rk3588 
+/sys/firmware/devicetree/base/serial-number: 770657b44c23be5a 
+/sys/devices/soc0/machine: MISSING
+/sys/devices/soc0/family: MISSING
+/sys/devices/soc0/soc_id: MISSING
+/sys/devices/soc0/revision: MISSING

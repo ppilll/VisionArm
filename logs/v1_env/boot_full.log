@@ -1,0 +1,7 @@
+
+================================================================================
+Complete serial boot log placeholder
+================================================================================
+MISSING: complete external serial boot log was not captured by Step A.
+This file is a placeholder only and MUST NOT be described as a complete boot log.
+A complete log, when collected in Step C, should begin before power-on and may include U-Boot, kernel, init/systemd, and login prompt.

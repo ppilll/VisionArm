@@ -1,0 +1,30 @@
+
+================================================================================
+RKNN Runtime and rknn_server inventory
+================================================================================
+NOTE: this collector does not execute rknn_server and does not load librknnrt.so.
+
+--- Dynamic linker cache entries ---
+	librknnrt.so (libc6,AArch64) => /lib/librknnrt.so
+
+--- Bounded Runtime/server search roots ---
+SCAN_ROOT: /usr
+SCAN_ROOT: /lib
+SCAN_ROOT: /lib64
+SCAN_ROOT: /opt
+
+[FOUND] /usr/bin/rknn_server
+-rwxr-xr-x 1 root root 439504 Jan 16  2025 /usr/bin/rknn_server
+/usr/bin/rknn_server: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0, BuildID[sha1]=f840fa8a1b13b1c64fc7013c96555e31355c53d1, stripped
+70310696d606e71bd44f1fcc5df07f65b628e8c19e7f750efff967f36f02ae69  /usr/bin/rknn_server
+MISSING or NOT_APPLICABLE: readelf unavailable or path is not a regular file
+
+[FOUND] /usr/lib/librknnrt.so
+-rw-r--r-- 1 root root 5241144 Jan 16  2025 /usr/lib/librknnrt.so
+/usr/lib/librknnrt.so: ELF 64-bit LSB shared object, ARM aarch64, version 1 (GNU/Linux), statically linked, BuildID[sha1]=7795f7cdc39c0c9f016ac0e22093bc96efd632f6, stripped
+9f53d7b1941338242e227fb097496261049c3aa1d8f2f343b27e439c325f6990  /usr/lib/librknnrt.so
+MISSING or NOT_APPLICABLE: readelf unavailable or path is not a regular file
+
+--- rknn_server process/status evidence ---
+root      1386  1354  3 08:00 ?        00:00:26 rknn_server
+NOT_APPLICABLE: systemctl command not found

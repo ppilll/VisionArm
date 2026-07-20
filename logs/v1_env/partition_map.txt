@@ -1,0 +1,46 @@
+
+================================================================================
+Partition and mount evidence
+================================================================================
+
+--- lsblk partition map ---
+MISSING: command not found: lsblk
+
+--- /proc/partitions ---
+PATH: /proc/partitions
+major minor  #blocks  name
+
+   1        0       4096 ram0
+ 179        0   61112320 mmcblk0
+ 179        1       4096 mmcblk0p1
+ 179        2       4096 mmcblk0p2
+ 179        3      65536 mmcblk0p3
+ 179        4     131072 mmcblk0p4
+ 179        5      32768 mmcblk0p5
+ 179        6   14680064 mmcblk0p6
+ 179        7     131072 mmcblk0p7
+ 179        8   46055407 mmcblk0p8
+
+
+--- findmnt -A ---
+MISSING: command not found: findmnt
+
+--- mount output ---
+$ mount
+/dev/mmcblk0p6 on / type ext4 (rw,relatime)
+devtmpfs on /dev type devtmpfs (rw,relatime,size=3987064k,nr_inodes=996766,mode=755)
+proc on /proc type proc (rw,relatime)
+tmpfs on /tmp type tmpfs (rw,relatime,size=4055992k,nr_inodes=1013998)
+tmpfs on /run type tmpfs (rw,nosuid,nodev,relatime,size=4055992k,nr_inodes=1013998,mode=755)
+tmpfs on /var/log type tmpfs (rw,nosuid,nodev,relatime,size=4055992k,nr_inodes=1013998,mode=755)
+devpts on /dev/pts type devpts (rw,relatime,gid=5,mode=620,ptmxmode=000)
+tmpfs on /dev/shm type tmpfs (rw,nosuid,nodev,noexec,relatime,size=4055992k,nr_inodes=1013998)
+sysfs on /sys type sysfs (rw,nosuid,nodev,noexec,relatime)
+configfs on /sys/kernel/config type configfs (rw,relatime)
+debugfs on /sys/kernel/debug type debugfs (rw,relatime)
+pstore on /sys/fs/pstore type pstore (rw,nosuid,nodev,noexec,relatime)
+/dev/mmcblk0p7 on /oem type ext4 (rw,relatime)
+/dev/mmcblk0p8 on /userdata type ext4 (rw,relatime)
+adb on /dev/usb-ffs/adb type functionfs (rw,relatime)
+192.168.50.1:/home/liu/linux/nfs on /mnt/nfs type nfs (rw,relatime,vers=3,rsize=524288,wsize=524288,namlen=255,hard,nolock,proto=tcp,timeo=600,retrans=2,sec=sys,mountaddr=192.168.50.1,mountvers=3,mountport=43219,mountproto=tcp,local_lock=all,addr=192.168.50.1)
+[EXIT] 0

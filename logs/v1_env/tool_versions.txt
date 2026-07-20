@@ -1,0 +1,70 @@
+
+================================================================================
+Compiler and build-tool inventory
+================================================================================
+
+--- gcc ---
+MISSING
+
+--- g++ ---
+MISSING
+
+--- cc ---
+MISSING
+
+--- c++ ---
+MISSING
+
+--- make ---
+path=/usr/bin/make
+GNU Make 4.2.1
+Built for aarch64-buildroot-linux-gnu
+Copyright (C) 1988-2016 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+exit=0
+
+--- cmake ---
+MISSING
+
+--- pkg-config ---
+MISSING
+
+--- ld ---
+MISSING
+
+--- as ---
+MISSING
+
+--- ar ---
+path=/usr/bin/ar
+ar: unrecognized option '--version'
+BusyBox v1.36.0 (2025-01-16 10:31:11 CST) multi-call binary.
+
+Usage: ar x|p|t|r [-ov] ARCHIVE [FILE]...
+
+Extract or list FILEs from an ar archive, or create it
+
+	x	Extract
+	p	Extract to stdout
+	t	List
+	r	Create
+	-o	Restore mtime
+	-v	Verbose
+exit=1
+
+--- readelf ---
+MISSING
+
+--- objdump ---
+MISSING
+
+--- file ---
+path=/usr/bin/file
+file-5.38
+magic file from /usr/share/misc/magic
+exit=0
+
+--- git ---
+MISSING

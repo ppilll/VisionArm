@@ -1,0 +1,35 @@
+
+================================================================================
+RootFS and init-system evidence
+================================================================================
+
+--- /etc/os-release ---
+PATH: /etc/os-release
+NAME=Buildroot
+VERSION=-g2a024528
+ID=buildroot
+VERSION_ID=2021.11
+PRETTY_NAME="Buildroot 2021.11"
+OS="buildroot"
+BUILD_INFO="dengtao@dengtao-virtual-machine Thu Jan 16 11:18:23 CST 2025 - rockchip_atk_dlrk3588_defconfig"
+KERNEL="5.10 - rockchip_linux_defconfig"
+
+
+--- /usr/lib/os-release (fallback/vendor copy) ---
+PATH: /usr/lib/os-release
+NAME=Buildroot
+VERSION=-g2a024528
+ID=buildroot
+VERSION_ID=2021.11
+PRETTY_NAME="Buildroot 2021.11"
+
+
+--- lsb_release -a ---
+MISSING: command not found: lsb_release
+
+--- systemd version ---
+MISSING: command not found: systemctl
+
+--- PID 1 identity ---
+init
+init       

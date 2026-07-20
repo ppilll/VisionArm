@@ -1,0 +1,190 @@
+
+================================================================================
+Device-node summary
+================================================================================
+NOTE: device nodes are only listed; none are opened.
+
+--- Video nodes ---
+crw-rw---- 1 root video 81,  0 Jan  1 08:00 /dev/video0
+crw-rw---- 1 root video 81,  1 Jan  1 08:00 /dev/video1
+crw-rw---- 1 root video 81, 10 Jan  1 08:00 /dev/video10
+crw-rw---- 1 root video 81, 11 Jan  1 08:00 /dev/video11
+crw-rw---- 1 root video 81, 12 Jan  1 08:00 /dev/video12
+crw-rw---- 1 root video 81, 13 Jan  1 08:00 /dev/video13
+crw-rw---- 1 root video 81, 14 Jan  1 08:00 /dev/video14
+crw-rw---- 1 root video 81, 15 Jan  1 08:00 /dev/video15
+crw-rw---- 1 root video 81, 16 Jan  1 08:00 /dev/video16
+crw-rw---- 1 root video 81, 17 Jan  1 08:00 /dev/video17
+crw-rw---- 1 root video 81, 18 Jan  1 08:00 /dev/video18
+crw-rw---- 1 root video 81, 19 Jan  1 08:00 /dev/video19
+crw-rw---- 1 root video 81,  2 Jan  1 08:00 /dev/video2
+crw-rw---- 1 root video 81, 20 Jan  1 08:00 /dev/video20
+crw-rw---- 1 root video 81, 21 Jan  1 08:00 /dev/video21
+crw-rw---- 1 root video 81, 22 Jan  1 08:00 /dev/video22
+crw-rw---- 1 root video 81, 23 Jan  1 08:00 /dev/video23
+crw-rw---- 1 root video 81, 24 Jan  1 08:00 /dev/video24
+crw-rw---- 1 root video 81, 25 Jan  1 08:00 /dev/video25
+crw-rw---- 1 root video 81, 26 Jan  1 08:00 /dev/video26
+crw-rw---- 1 root video 81, 27 Jan  1 08:00 /dev/video27
+crw-rw---- 1 root video 81, 28 Jan  1 08:00 /dev/video28
+crw-rw---- 1 root video 81, 29 Jan  1 08:00 /dev/video29
+crw-rw---- 1 root video 81,  3 Jan  1 08:00 /dev/video3
+crw-rw---- 1 root video 81, 30 Jan  1 08:00 /dev/video30
+crw-rw---- 1 root video 81, 31 Jan  1 08:00 /dev/video31
+crw-rw---- 1 root video 81, 32 Jan  1 08:00 /dev/video32
+crw-rw---- 1 root video 81, 33 Jan  1 08:00 /dev/video33
+crw-rw---- 1 root video 81, 34 Jan  1 08:00 /dev/video34
+crw-rw---- 1 root video 81, 35 Jan  1 08:00 /dev/video35
+crw-rw---- 1 root video 81, 36 Jan  1 08:00 /dev/video36
+crw-rw---- 1 root video 81, 37 Jan  1 08:00 /dev/video37
+crw-rw---- 1 root video 81, 38 Jan  1 08:00 /dev/video38
+crw-rw---- 1 root video 81, 39 Jan  1 08:00 /dev/video39
+crw-rw---- 1 root video 81,  4 Jan  1 08:00 /dev/video4
+crw-rw---- 1 root video 81, 40 Jan  1 08:00 /dev/video40
+crw-rw---- 1 root video 81,  5 Jan  1 08:00 /dev/video5
+crw-rw---- 1 root video 81,  6 Jan  1 08:00 /dev/video6
+crw-rw---- 1 root video 81,  7 Jan  1 08:00 /dev/video7
+crw-rw---- 1 root video 81,  8 Jan  1 08:00 /dev/video8
+crw-rw---- 1 root video 81,  9 Jan  1 08:00 /dev/video9
+lrwxrwxrwx 1 root root       7 Jan  1 08:00 /dev/video-camera0 -> video31
+-rw-r--r-- 1 root root       4 Jan  1 08:00 /dev/video-dec0
+-rw-r--r-- 1 root root       4 Jan  1 08:00 /dev/video-enc0
+
+
+
+
+	ACT1 [-a] ACT2	If ACT1 fails, stop, else do ACT2
+	ACT1 -o ACT2	If ACT1 succeeds, stop, else do ACT2
+	! ACT		Invert ACT's success/failure
+Actions:
+	( ACTIONS )	Group actions for -o / -a
+			actions to command line arguments only
+	-amin MINS	atime +N/-N/N minutes in the past
+	-atime DAYS	atime +N/-N/N days in the past
+BusyBox v1.36.0 (2025-01-16 10:31:11 CST) multi-call binary.
+	-cmin MINS	ctime +N/-N/N minutes in the past
+	-ctime DAYS	ctime +N/-N/N days in the past
+Defaults: PATH is current directory, action is '-print'
+	-depth		Act on directory *after* traversing it
+	-empty		Match empty file/directory
+	-exec CMD ARG ;	Run CMD with all instances of {} replaced by
+	-exec CMD ARG + Run CMD with {} replaced by list of file names
+	-executable	File is executable
+			file name. Fails if CMD exits with nonzero
+find: unrecognized: -printf
+First failed action stops processing of current file.
+	-group NAME/ID	File is owned by given group
+	-H		...on command line only
+If none of the following actions is specified, -print is assumed
+	-iname PATTERN	Case insensitive -name
+	-ipath PATTERN	Case insensitive -path
+	-L,-follow	Follow symlinks
+	-maxdepth N	Descend at most N levels. -maxdepth 0 applies
+	-mindepth N	Don't act on first N levels
+	-mmin MINS	mtime is greater than (+N), less than (-N),
+	-mtime DAYS	mtime is greater than (+N), less than (-N),
+	-name PATTERN	Match file name (w/o directory name) to PATTERN
+	-newer FILE	mtime is more recent than FILE's
+			+/-N: file size is bigger/smaller than N
+			Note: -a has higher priority than -o
+			or exactly MASK bits are set in file's mode
+			or exactly N days in the past
+			or exactly N minutes in the past
+	-path PATTERN	Match path to PATTERN
+	-perm MASK	At least one mask bit (+MASK), all bits (-MASK),
+	-print0		Print file name, NUL terminated
+	-print		Print file name
+	-prune		If current file is directory, don't descend into it
+	-quit		Exit
+	-regex PATTERN	Match path to regex PATTERN
+	-samefile FILE	File is same as FILE
+Search for files and perform actions on them.
+	-size N[bck]	File size is N (c:bytes,k:kbytes,b:512 bytes(def.))
+	-type X		File type is X (one of: f,d,l,b,c,s,p)
+Usage: find [-HL] [PATH]... [OPTIONS] [ACTIONS]
+	-user NAME/ID	File is owned by given user
+	-xdev		Don't descend directories on other filesystems
+
+--- UART/serial candidate nodes ---
+crw-rw---- 1 root dialout 4, 67 Jan  1 08:00 /dev/ttyS3
+crw-rw---- 1 root dialout 253, 0 Jan  1 08:00 /dev/ttyFIQ0
+
+--- /proc/tty/driver/serial (read-only) ---
+serinfo:1.0 driver revision:
+3: uart:16550A mmio:0xFEB60000 irq:109 tx:0 rx:0
+
+--- CAN network interfaces ---
+2: can0: <NOARP,ECHO> mtu 16 qdisc noop state DOWN mode DEFAULT group default qlen 10
+    link/can  promiscuity 0 minmtu 0 maxmtu 0 
+    can state STOPPED (berr-counter tx 0 rx 0) restart-ms 1 
+	  rockchip_canfd: tseg1 1..128 tseg2 1..128 sjw 1..128 brp 1..256 brp-inc 2
+	  clock 99000000 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 
+
+--- NPU/media candidate nodes ---
+crw-rw---- 1 root video 241, 0 Jan  1 08:00 /dev/mpp_service
+total 0
+lrwxrwxrwx 1 root root  8 Jan  1 08:00 platform-display-subsystem-card -> ../card0
+lrwxrwxrwx 1 root root 13 Jan  1 08:00 platform-display-subsystem-render -> ../renderD128
+lrwxrwxrwx 1 root root  8 Jan  1 08:00 platform-fdab0000.npu-card -> ../card1
+lrwxrwxrwx 1 root root 13 Jan  1 08:00 platform-fdab0000.npu-render -> ../renderD129
+crw-rw---- 1 root video 226, 0 Jan  1 08:00 /dev/dri/card0
+crw-rw---- 1 root video 226, 1 Jan  1 08:00 /dev/dri/card1
+crw-rw-rw- 1 root video 226, 128 Jan  1 08:00 /dev/dri/renderD128
+crw-rw-rw- 1 root video 226, 129 Jan  1 08:00 /dev/dri/renderD129
+
+--- TTY sysfs names (maximum 240) ---
+
+
+
+
+	ACT1 [-a] ACT2	If ACT1 fails, stop, else do ACT2
+	ACT1 -o ACT2	If ACT1 succeeds, stop, else do ACT2
+	! ACT		Invert ACT's success/failure
+Actions:
+	( ACTIONS )	Group actions for -o / -a
+			actions to command line arguments only
+	-amin MINS	atime +N/-N/N minutes in the past
+	-atime DAYS	atime +N/-N/N days in the past
+BusyBox v1.36.0 (2025-01-16 10:31:11 CST) multi-call binary.
+	-cmin MINS	ctime +N/-N/N minutes in the past
+	-ctime DAYS	ctime +N/-N/N days in the past
+Defaults: PATH is current directory, action is '-print'
+	-depth		Act on directory *after* traversing it
+	-empty		Match empty file/directory
+	-exec CMD ARG ;	Run CMD with all instances of {} replaced by
+	-exec CMD ARG + Run CMD with {} replaced by list of file names
+	-executable	File is executable
+			file name. Fails if CMD exits with nonzero
+find: unrecognized: -printf
+First failed action stops processing of current file.
+	-group NAME/ID	File is owned by given group
+	-H		...on command line only
+If none of the following actions is specified, -print is assumed
+	-iname PATTERN	Case insensitive -name
+	-ipath PATTERN	Case insensitive -path
+	-L,-follow	Follow symlinks
+	-maxdepth N	Descend at most N levels. -maxdepth 0 applies
+	-mindepth N	Don't act on first N levels
+	-mmin MINS	mtime is greater than (+N), less than (-N),
+	-mtime DAYS	mtime is greater than (+N), less than (-N),
+	-name PATTERN	Match file name (w/o directory name) to PATTERN
+	-newer FILE	mtime is more recent than FILE's
+			+/-N: file size is bigger/smaller than N
+			Note: -a has higher priority than -o
+			or exactly MASK bits are set in file's mode
+			or exactly N days in the past
+			or exactly N minutes in the past
+	-path PATTERN	Match path to PATTERN
+	-perm MASK	At least one mask bit (+MASK), all bits (-MASK),
+	-print0		Print file name, NUL terminated
+	-print		Print file name
+	-prune		If current file is directory, don't descend into it
+	-quit		Exit
+	-regex PATTERN	Match path to regex PATTERN
+	-samefile FILE	File is same as FILE
+Search for files and perform actions on them.
+	-size N[bck]	File size is N (c:bytes,k:kbytes,b:512 bytes(def.))
+	-type X		File type is X (one of: f,d,l,b,c,s,p)
+Usage: find [-HL] [PATH]... [OPTIONS] [ACTIONS]
+	-user NAME/ID	File is owned by given user
+	-xdev		Don't descend directories on other filesystems

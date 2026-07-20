@@ -1,0 +1,16 @@
+Note Book ip:192.168.50.1/24
+开发板ip:192.168.50.2/24
+Note Book
+sudo ip addr flush dev ens37
+sudo ip link set ens37 up
+sudo ip addr add 192.168.50.1/24 dev ens37
+
+开发板
+ip addr add 192.168.50.2/24 dev eth1
+ping -c 4 192.168.50.1
+\
+ping -c 4 192.168.50.2
+
+mount -t nfs -o vers=3,nolock,proto=tcp \
+    192.168.50.1:/home/liu/linux/nfs \
+    /mnt/nfs

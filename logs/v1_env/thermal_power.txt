@@ -1,0 +1,68 @@
+
+================================================================================
+Thermal and current power-policy evidence
+================================================================================
+NOTE: only current values are read; governors and frequencies are not changed.
+
+--- Thermal zones (maximum 64) ---
+
+[/sys/class/thermal/thermal_zone0]
+type=soc-thermal
+temp=32384
+policy=step_wise
+
+[/sys/class/thermal/thermal_zone1]
+type=bigcore0-thermal
+temp=32384
+policy=step_wise
+
+[/sys/class/thermal/thermal_zone2]
+type=bigcore1-thermal
+temp=32384
+policy=step_wise
+
+[/sys/class/thermal/thermal_zone3]
+type=littlecore-thermal
+temp=32384
+policy=step_wise
+
+[/sys/class/thermal/thermal_zone4]
+type=center-thermal
+temp=31461
+policy=step_wise
+
+[/sys/class/thermal/thermal_zone5]
+type=gpu-thermal
+temp=31461
+policy=step_wise
+
+[/sys/class/thermal/thermal_zone6]
+type=npu-thermal
+temp=32384
+policy=step_wise
+
+--- CPU frequency policies (maximum 32) ---
+
+[/sys/devices/system/cpu/cpufreq/policy0]
+affected_cpus=0 1 2 3
+scaling_driver=cpufreq-dt
+scaling_governor=schedutil
+scaling_cur_freq=1800000
+cpuinfo_min_freq=408000
+cpuinfo_max_freq=1800000
+
+[/sys/devices/system/cpu/cpufreq/policy4]
+affected_cpus=4 5
+scaling_driver=cpufreq-dt
+scaling_governor=schedutil
+scaling_cur_freq=408000
+cpuinfo_min_freq=408000
+cpuinfo_max_freq=2304000
+
+[/sys/devices/system/cpu/cpufreq/policy6]
+affected_cpus=6 7
+scaling_driver=cpufreq-dt
+scaling_governor=schedutil
+scaling_cur_freq=408000
+cpuinfo_min_freq=408000
+cpuinfo_max_freq=2304000

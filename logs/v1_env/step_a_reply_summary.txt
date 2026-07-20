@@ -1,0 +1,1389 @@
+
+==================== session_metadata.txt ====================
+
+================================================================================
+Session metadata
+================================================================================
+project=VisionArm BallTrack
+stage=V1 RK3588 environment baseline
+collector_version=1.0
+start_time=1970-01-01T08:13:34+08:00
+execution_user=root
+uid_gid=uid=0(root) gid=0(root) groups=0(root)
+hostname=ATK-DLRK3588
+pwd=/mnt/nfs/VisionARM/v1
+script_path=./collect_board_info.sh
+script_dir=/mnt/nfs/VisionARM/v1
+repo_root=/mnt/nfs
+log_dir=/mnt/nfs/visionarm_logs/v1_env
+sudo_used=NO
+system_modification=NO (repository log files only)
+end_time=1970-01-01T08:13:35+08:00
+session_log=/mnt/nfs/visionarm_logs/v1_env/collect_board_info_19700101_081334.log
+manifest_note=active collect_board_info_*.log is excluded from manifest because it remains open until exit
+
+==================== board_identity.txt ====================
+
+================================================================================
+Board identity evidence
+================================================================================
+
+--- Device Tree model ---
+PATH: /proc/device-tree/model
+ATK-DLRK3588 Board
+
+--- Device Tree compatible list ---
+PATH: /proc/device-tree/compatible
+rockchip,rk3588-evb7-lp4-v10
+rockchip,rk3588
+
+--- Device Tree serial-number ---
+PATH: /proc/device-tree/serial-number
+770657b44c23be5a
+
+--- Kernel hostname ---
+PATH: /proc/sys/kernel/hostname
+ATK-DLRK3588
+
+
+--- Kernel command line ---
+PATH: /proc/cmdline
+storagemedia=emmc androidboot.storagemedia=emmc androidboot.mode=normal  androidboot.verifiedbootstate=orange rw rootwait earlycon=uart8250,mmio32,0xfeb50000 console=ttyFIQ0 irqchip.gicv3_pseudo_nmi=0 root=PARTUUID=614e0000-0000
+
+
+--- uname -a ---
+$ uname -a
+Linux ATK-DLRK3588 5.10.160 #1 SMP Tue Oct 21 14:42:25 CST 2025 aarch64 GNU/Linux
+[EXIT] 0
+
+--- Board/SoC evidence filtered from dmesg ---
+[    1.628044] Machine model: ATK-DLRK3588 Board
+[    2.194462] rockchip-gpio fd8a0000.gpio: probed /pinctrl/gpio@fd8a0000
+[    2.195216] rockchip-gpio fec20000.gpio: probed /pinctrl/gpio@fec20000
+[    2.195945] rockchip-gpio fec30000.gpio: probed /pinctrl/gpio@fec30000
+[    2.196673] rockchip-gpio fec40000.gpio: probed /pinctrl/gpio@fec40000
+[    2.197427] rockchip-gpio fec50000.gpio: probed /pinctrl/gpio@fec50000
+[    2.198044] rockchip-pinctrl pinctrl: probed pinctrl
+[    2.216916] arm-scmi firmware:scmi: SCMI Protocol v2.0 'rockchip:' Firmware version 0x0
+[    2.219171] rockchip-cpuinfo cpuinfo: SoC		: 35881000
+[    2.219175] rockchip-cpuinfo cpuinfo: Serial		: 770657b44c23be5a
+[    2.466377] rockchip-thermal fec00000.tsadc: Missing rockchip,grf property
+[    2.466747] rockchip-thermal fec00000.tsadc: tsadc is probed successfully!
+[    2.491160] rockchip-csi2-dphy-hw fedc0000.csi2-dphy0-hw: csi2 dphy hw probe successfully!
+[    2.491214] rockchip-csi2-dphy-hw fedc8000.csi2-dphy1-hw: csi2 dphy hw probe successfully!
+[    2.497266] rockchip-hdptx-phy-hdmi fed60000.hdmiphy: hdptx phy init success
+[    2.497796] rockchip-hdptx-phy-hdmi fed70000.hdmiphy: hdptx phy init success
+[    2.500265] mpp_service mpp-srv: f421f8a9774d author: Yandong Lin 2023-09-21 video: rockchip: mpp: rkvenc2: fix slice mode poll failed
+[    2.514947] rockchip-pvtm fda40000.pvtm: pvtm@0 probed
+[    2.514983] rockchip-pvtm fda50000.pvtm: pvtm@1 probed
+[    2.515017] rockchip-pvtm fda60000.pvtm: pvtm@2 probed
+[    2.515051] rockchip-pvtm fdaf0000.pvtm: pvtm@3 probed
+[    2.515083] rockchip-pvtm fdb30000.pvtm: pvtm@4 probed
+[    2.515481] rockchip-system-monitor rockchip-system-monitor: system monitor probe
+[    2.518089] rockchip-vop2 fdd90000.vop: Adding to iommu group 17
+[    2.524883] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp0 assign plane mask: 0x5, primary plane phy id: 2
+[    2.524891] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp1 assign plane mask: 0xa, primary plane phy id: 3
+[    2.524897] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp2 assign plane mask: 0x140, primary plane phy id: 8
+[    2.524902] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp3 assign plane mask: 0x280, primary plane phy id: 9
+[    2.532332] rockchip-drm display-subsystem: bound fdd90000.vop (ops 0xffffffc00932d4a0)
+[    2.532651] dwhdmi-rockchip fde80000.hdmi: registered ddc I2C bus driver
+[    2.532931] rockchip-drm display-subsystem: bound fde80000.hdmi (ops 0xffffffc00933c030)
+[    2.533183] dwhdmi-rockchip fdea0000.hdmi: registered ddc I2C bus driver
+[    2.533438] rockchip-drm display-subsystem: bound fdea0000.hdmi (ops 0xffffffc00933c030)
+[    2.544826] rockchip-spi feb20000.spi: no high_speed pinctrl state
+[    2.558335] rockchip-spi feb20000.spi: probed, poll=0, rsd=0, cs-inactive=0, ready=0
+[    4.436502] rockchip-mipi-csi2-hw fdd10000.mipi0-csi2-hw: enter mipi csi2 hw probe!
+[    4.436566] rockchip-mipi-csi2-hw fdd10000.mipi0-csi2-hw: probe success, v4l2_dev:mipi0-csi2-hw!
+[    4.436591] rockchip-mipi-csi2-hw fdd20000.mipi1-csi2-hw: enter mipi csi2 hw probe!
+[    4.436630] rockchip-mipi-csi2-hw fdd20000.mipi1-csi2-hw: probe success, v4l2_dev:mipi1-csi2-hw!
+[    4.436651] rockchip-mipi-csi2-hw fdd30000.mipi2-csi2-hw: enter mipi csi2 hw probe!
+[    4.436688] rockchip-mipi-csi2-hw fdd30000.mipi2-csi2-hw: probe success, v4l2_dev:mipi2-csi2-hw!
+[    4.436709] rockchip-mipi-csi2-hw fdd40000.mipi3-csi2-hw: enter mipi csi2 hw probe!
+[    4.436745] rockchip-mipi-csi2-hw fdd40000.mipi3-csi2-hw: probe success, v4l2_dev:mipi3-csi2-hw!
+[    4.436767] rockchip-mipi-csi2-hw fdd50000.mipi4-csi2-hw: enter mipi csi2 hw probe!
+[    4.436806] rockchip-mipi-csi2-hw fdd50000.mipi4-csi2-hw: probe success, v4l2_dev:mipi4-csi2-hw!
+[    4.436826] rockchip-mipi-csi2-hw fdd60000.mipi5-csi2-hw: enter mipi csi2 hw probe!
+[    4.436862] rockchip-mipi-csi2-hw fdd60000.mipi5-csi2-hw: probe success, v4l2_dev:mipi5-csi2-hw!
+[    4.437215] rockchip-mipi-csi2 mipi0-csi2: attach to csi2 hw node
+[    4.437233] rkcif rkcif-mipi-lvds: Entity type for entity rockchip-mipi-csi2 was not initialized!
+[    4.437239] rockchip-mipi-csi2: Async registered subdev
+[    4.437243] rockchip-mipi-csi2: probe success, v4l2_dev:rkcif-mipi-lvds!
+[    4.437347] rockchip-mipi-csi2 mipi2-csi2: attach to csi2 hw node
+[    4.437361] rkcif rkcif-mipi-lvds2: Entity type for entity rockchip-mipi-csi2 was not initialized!
+[    4.437366] rockchip-mipi-csi2: Async registered subdev
+[    4.437369] rockchip-mipi-csi2: probe success, v4l2_dev:rkcif-mipi-lvds2!
+[    4.438181] rkisp_hw fdcb0000.rkisp: Missing rockchip,grf property
+[    4.438513] rkisp_hw fdcc0000.rkisp: Missing rockchip,grf property
+[    4.500325] dwmmc_rockchip fe2c0000.mmc: No normal pinctrl state
+[    4.500335] dwmmc_rockchip fe2c0000.mmc: No idle pinctrl state
+[    4.500481] dwmmc_rockchip fe2c0000.mmc: IDMAC supports 32-bit address mode.
+[    4.500503] dwmmc_rockchip fe2c0000.mmc: Using internal DMA controller.
+[    4.500514] dwmmc_rockchip fe2c0000.mmc: Version ID is 270a
+[    4.500548] dwmmc_rockchip fe2c0000.mmc: DW MMC controller at irq 94,32 bit host data width,256 deep fifo
+[    4.502816] dwmmc_rockchip fe2c0000.mmc: Failed getting OCR mask: -22
+[    4.506950] dwmmc_rockchip fe2c0000.mmc: could not set regulator OCR (-22)
+[    4.506967] dwmmc_rockchip fe2c0000.mmc: failed to enable vmmc regulator
+[    4.527924] rockchip-i2s-tdm fddf0000.i2s: CLK-ALWAYS-ON: mclk: 12288000, bclk: 3072000, fsync: 48000
+[    4.531730] rockchip-i2s-tdm fddf4000.i2s: CLK-ALWAYS-ON: mclk: 12288000, bclk: 3072000, fsync: 48000
+[    4.534771] input: rockchip-dp0 rockchip-dp0 as /devices/platform/dp0-sound/sound/card0/input2
+[    4.535664] input: rockchip-dp1 rockchip-dp1 as /devices/platform/dp1-sound/sound/card1/input3
+[    4.547893] input: rockchip,hdmiin rockchip,hdmiin as /devices/platform/hdmiin-sound/sound/card2/input4
+[    4.561809] ES8323 7-0011: ASoC: error at soc_component_write_no_lock on ES8323.7-0011: -5
+[    4.611009] input: rockchip-es8388 Headset as /devices/platform/es8388-sound/sound/card3/input6
+[    4.613888] [WLAN_RFKILL]: can't find rockchip,grf property
+[    4.849579] rockchip-dmc dmc: bin=0
+[    4.849758] rockchip-dmc dmc: leakage=40
+[    4.849771] rockchip-dmc dmc: leakage-volt-sel=1
+[    4.849785] rockchip-dmc dmc: soc version=0, speed=1
+[    4.850625] rockchip-dmc dmc: avs=0
+[    4.850642] rockchip-dmc dmc: current ATF version 0x100
+[    4.850835] rockchip-dmc dmc: normal_rate = 1068000000
+[    4.850844] rockchip-dmc dmc: reboot_rate = 1560000000
+[    4.850851] rockchip-dmc dmc: suspend_rate = 528000000
+[    4.850859] rockchip-dmc dmc: video_4k_rate = 1068000000
+[    4.850866] rockchip-dmc dmc: video_4k_10b_rate = 1068000000
+[    4.850874] rockchip-dmc dmc: video_svep_rate = 1068000000
+[    4.850881] rockchip-dmc dmc: boost_rate = 1560000000
+[    4.850888] rockchip-dmc dmc: fixed_rate(isp|cif0|cif1|dualview) = 1560000000
+[    4.850895] rockchip-dmc dmc: performance_rate = 1560000000
+[    4.850903] rockchip-dmc dmc: hdmirx_rate = 1560000000
+[    4.850913] rockchip-dmc dmc: failed to get vop bandwidth to dmc rate
+[    4.850919] rockchip-dmc dmc: failed to get vop pn to msch rl
+[    4.851030] rockchip-dmc dmc: l=10000 h=2147483647 hyst=5000 l_limit=0 h_limit=0 h_table=0
+[    4.851933] rockchip-dmc dmc: could not find power_model node
+[    4.860287] rockchip-csi2-dphy csi2-dcphy0: csi2 dphy0 probe successfully!
+[    4.860634] rockchip-csi2-dphy csi2-dphy0: csi2 dphy0 probe successfully!
+[    4.866449] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp0 assign plane mask: 0x5, primary plane phy id: 2
+[    4.866482] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp1 assign plane mask: 0xa, primary plane phy id: 3
+[    4.866494] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp2 assign plane mask: 0x140, primary plane phy id: 8
+[    4.866505] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp3 assign plane mask: 0x280, primary plane phy id: 9
+[    4.888364] rockchip-drm display-subsystem: bound fdd90000.vop (ops 0xffffffc00932d4a0)
+[    4.889872] dwhdmi-rockchip fde80000.hdmi: registered ddc I2C bus driver
+[    4.891265] rockchip-drm display-subsystem: bound fde80000.hdmi (ops 0xffffffc00933c030)
+[    4.892503] dwhdmi-rockchip fdea0000.hdmi: registered ddc I2C bus driver
+[    4.893708] rockchip-drm display-subsystem: bound fdea0000.hdmi (ops 0xffffffc00933c030)
+[    4.893775] rockchip-drm display-subsystem: bound fde20000.dsi (ops 0xffffffc00933e848)
+[    4.893858] rockchip-drm display-subsystem: bound fde50000.dp (ops 0xffffffc00933ebd8)
+[    4.893923] rockchip-drm display-subsystem: bound fde60000.dp (ops 0xffffffc00933ebd8)
+[    4.897195] rockchip-drm display-subsystem: route-hdmi0: failed to get logo,offset
+[    4.897205] rockchip-drm display-subsystem: route-hdmi1: failed to get logo,offset
+[    4.919226] rockchip-drm display-subsystem: [drm] fb0: rockchipdrmfb frame buffer device
+[    4.920249] [drm] Initialized rockchip 3.0.0 20140818 for display-subsystem on minor 0
+[    4.922478] input: rockchip-hdmi0 rockchip-hdmi0 as /devices/platform/hdmi0-sound/sound/card4/input9
+[    4.923689] input: rockchip-hdmi1 rockchip-hdmi1 as /devices/platform/hdmi1-sound/sound/card5/input10
+[    5.284125] rockchip-pm rockchip-suspend: not set pwm-regulator-config
+[    5.284843] rockchip-suspend not set sleep-mode-config for mem-lite
+[    5.284852] rockchip-suspend not set wakeup-config for mem-lite
+[    5.284861] rockchip-suspend not set sleep-mode-config for mem-ultra
+[    5.284868] rockchip-suspend not set wakeup-config for mem-ultra
+[    5.286653]   #0: rockchip-dp0
+[    5.286660]   #1: rockchip-dp1
+[    5.286666]   #2: rockchip,hdmiin
+[    5.286672]   #3: rockchip-es8388
+[    5.286679]   #4: rockchip-hdmi0
+[    5.286686]   #5: rockchip-hdmi1
+[    7.789696] hdmi-audio-codec hdmi-audio-codec.6.auto: ASoC: error at snd_soc_dai_startup on i2s-hifi: -19
+[    7.801846] hdmi-audio-codec hdmi-audio-codec.6.auto: ASoC: error at snd_soc_dai_startup on i2s-hifi: -19
+[    7.813782] hdmi-audio-codec hdmi-audio-codec.6.auto: ASoC: error at snd_soc_dai_startup on i2s-hifi: -19
+
+--- Candidate board identity files (bounded) ---
+/sys/firmware/devicetree/base/model: ATK-DLRK3588 Board 
+/sys/firmware/devicetree/base/compatible: rockchip,rk3588-evb7-lp4-v10 rockchip,rk3588 
+/sys/firmware/devicetree/base/serial-number: 770657b44c23be5a 
+/sys/devices/soc0/machine: MISSING
+/sys/devices/soc0/family: MISSING
+/sys/devices/soc0/soc_id: MISSING
+/sys/devices/soc0/revision: MISSING
+
+==================== device_tree.txt ====================
+
+================================================================================
+Device Tree evidence
+================================================================================
+
+--- model ---
+PATH: /proc/device-tree/model
+ATK-DLRK3588 Board
+
+--- compatible ---
+PATH: /proc/device-tree/compatible
+rockchip,rk3588-evb7-lp4-v10
+rockchip,rk3588
+
+--- chosen/bootargs ---
+PATH: /proc/device-tree/chosen/bootargs
+storagemedia=emmc androidboot.storagemedia=emmc androidboot.mode=normal  androidboot.verifiedbootstate=orange rw rootwait earlycon=uart8250,mmio32,0xfeb50000 console=ttyFIQ0 irqchip.gicv3_pseudo_nmi=0 root=PARTUUID=614e0000-0000
+
+--- serial-number ---
+PATH: /proc/device-tree/serial-number
+770657b44c23be5a
+
+--- Device Tree top-level entries (maximum 240) ---
+
+
+
+
+	ACT1 [-a] ACT2	If ACT1 fails, stop, else do ACT2
+	ACT1 -o ACT2	If ACT1 succeeds, stop, else do ACT2
+	! ACT		Invert ACT's success/failure
+Actions:
+	( ACTIONS )	Group actions for -o / -a
+			actions to command line arguments only
+	-amin MINS	atime +N/-N/N minutes in the past
+	-atime DAYS	atime +N/-N/N days in the past
+BusyBox v1.36.0 (2025-01-16 10:31:11 CST) multi-call binary.
+	-cmin MINS	ctime +N/-N/N minutes in the past
+	-ctime DAYS	ctime +N/-N/N days in the past
+Defaults: PATH is current directory, action is '-print'
+	-depth		Act on directory *after* traversing it
+	-empty		Match empty file/directory
+	-exec CMD ARG ;	Run CMD with all instances of {} replaced by
+	-exec CMD ARG + Run CMD with {} replaced by list of file names
+	-executable	File is executable
+			file name. Fails if CMD exits with nonzero
+find: unrecognized: -printf
+First failed action stops processing of current file.
+	-group NAME/ID	File is owned by given group
+	-H		...on command line only
+If none of the following actions is specified, -print is assumed
+	-iname PATTERN	Case insensitive -name
+	-ipath PATTERN	Case insensitive -path
+	-L,-follow	Follow symlinks
+	-maxdepth N	Descend at most N levels. -maxdepth 0 applies
+	-mindepth N	Don't act on first N levels
+	-mmin MINS	mtime is greater than (+N), less than (-N),
+	-mtime DAYS	mtime is greater than (+N), less than (-N),
+	-name PATTERN	Match file name (w/o directory name) to PATTERN
+	-newer FILE	mtime is more recent than FILE's
+			+/-N: file size is bigger/smaller than N
+			Note: -a has higher priority than -o
+			or exactly MASK bits are set in file's mode
+			or exactly N days in the past
+			or exactly N minutes in the past
+	-path PATTERN	Match path to PATTERN
+	-perm MASK	At least one mask bit (+MASK), all bits (-MASK),
+	-print0		Print file name, NUL terminated
+	-print		Print file name
+	-prune		If current file is directory, don't descend into it
+	-quit		Exit
+	-regex PATTERN	Match path to regex PATTERN
+	-samefile FILE	File is same as FILE
+Search for files and perform actions on them.
+	-size N[bck]	File size is N (c:bytes,k:kbytes,b:512 bytes(def.))
+	-type X		File type is X (one of: f,d,l,b,c,s,p)
+Usage: find [-HL] [PATH]... [OPTIONS] [ACTIONS]
+	-user NAME/ID	File is owned by given user
+	-xdev		Don't descend directories on other filesystems
+
+--- Relevant Device Tree node names (bounded depth and result count) ---
+INFO: no matching Device Tree node names found, or access was restricted
+
+==================== uname.txt ====================
+
+================================================================================
+Kernel and uname evidence
+================================================================================
+
+--- uname -a ---
+$ uname -a
+Linux ATK-DLRK3588 5.10.160 #1 SMP Tue Oct 21 14:42:25 CST 2025 aarch64 GNU/Linux
+[EXIT] 0
+
+--- uname -srvm ---
+$ uname -srvm
+Linux 5.10.160 #1 SMP Tue Oct 21 14:42:25 CST 2025 aarch64
+[EXIT] 0
+
+--- uname -m ---
+$ uname -m
+aarch64
+[EXIT] 0
+
+--- /proc/version ---
+PATH: /proc/version
+Linux version 5.10.160 (alientek@alientek) (aarch64-none-linux-gnu-gcc (GNU Toolchain for the A-profile Architecture 10.3-2021.07 (arm-10.29)) 10.3.1 20210621, GNU ld (GNU Toolchain for the A-profile Architecture 10.3-2021.07 (arm-10.29)) 2.36.1.20210621) #1 SMP Tue Oct 21 14:42:25 CST 2025
+
+
+--- /proc/cmdline ---
+PATH: /proc/cmdline
+storagemedia=emmc androidboot.storagemedia=emmc androidboot.mode=normal  androidboot.verifiedbootstate=orange rw rootwait earlycon=uart8250,mmio32,0xfeb50000 console=ttyFIQ0 irqchip.gicv3_pseudo_nmi=0 root=PARTUUID=614e0000-0000
+
+
+==================== os_release.txt ====================
+
+================================================================================
+RootFS and init-system evidence
+================================================================================
+
+--- /etc/os-release ---
+PATH: /etc/os-release
+NAME=Buildroot
+VERSION=-g2a024528
+ID=buildroot
+VERSION_ID=2021.11
+PRETTY_NAME="Buildroot 2021.11"
+OS="buildroot"
+BUILD_INFO="dengtao@dengtao-virtual-machine Thu Jan 16 11:18:23 CST 2025 - rockchip_atk_dlrk3588_defconfig"
+KERNEL="5.10 - rockchip_linux_defconfig"
+
+
+--- /usr/lib/os-release (fallback/vendor copy) ---
+PATH: /usr/lib/os-release
+NAME=Buildroot
+VERSION=-g2a024528
+ID=buildroot
+VERSION_ID=2021.11
+PRETTY_NAME="Buildroot 2021.11"
+
+
+--- lsb_release -a ---
+MISSING: command not found: lsb_release
+
+--- systemd version ---
+MISSING: command not found: systemctl
+
+--- PID 1 identity ---
+init
+init       
+
+==================== cpuinfo.txt ====================
+
+================================================================================
+CPU, userspace bitness, and libc evidence
+================================================================================
+
+--- lscpu ---
+MISSING: command not found: lscpu
+
+--- /proc/cpuinfo ---
+PATH: /proc/cpuinfo
+processor	: 0
+BogoMIPS	: 48.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x2
+CPU part	: 0xd05
+CPU revision	: 0
+
+processor	: 1
+BogoMIPS	: 48.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x2
+CPU part	: 0xd05
+CPU revision	: 0
+
+processor	: 2
+BogoMIPS	: 48.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x2
+CPU part	: 0xd05
+CPU revision	: 0
+
+processor	: 3
+BogoMIPS	: 48.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x2
+CPU part	: 0xd05
+CPU revision	: 0
+
+processor	: 4
+BogoMIPS	: 48.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x4
+CPU part	: 0xd0b
+CPU revision	: 0
+
+processor	: 5
+BogoMIPS	: 48.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x4
+CPU part	: 0xd0b
+CPU revision	: 0
+
+processor	: 6
+BogoMIPS	: 48.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x4
+CPU part	: 0xd0b
+CPU revision	: 0
+
+processor	: 7
+BogoMIPS	: 48.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x4
+CPU part	: 0xd0b
+CPU revision	: 0
+
+Serial		: 770657b44c23be5a
+
+
+--- getconf LONG_BIT ---
+$ getconf LONG_BIT
+64
+[EXIT] 0
+
+--- getconf GNU_LIBC_VERSION ---
+$ getconf GNU_LIBC_VERSION
+glibc 2.37
+[EXIT] 0
+
+--- Package-manager architecture evidence ---
+MISSING: no dpkg/rpm/apk architecture query available
+
+--- libc / loader evidence ---
+ldd (Buildroot) 2.37
+Copyright (C) 2023 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+Written by Roland McGrath and Ulrich Drepper.
+/bin/sh: symbolic link to bash
+/bin/bash: ELF 64-bit LSB shared object, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0, stripped
+-rwxr-xr-x 1 root root 173280 Jan 16  2025 /lib/ld-linux-aarch64.so.1
+/usr/lib/ld-linux-aarch64.so.1
+-rwxr-xr-x 1 root root 173280 Jan 16  2025 /lib64/ld-linux-aarch64.so.1
+/usr/lib/ld-linux-aarch64.so.1
+
+==================== memory_storage.txt ====================
+
+================================================================================
+Memory and storage evidence
+================================================================================
+
+--- free -h ---
+$ free -h
+               total        used        free      shared  buff/cache   available
+Mem:           7.7Gi       367Mi       7.1Gi        51Mi       245Mi       7.2Gi
+Swap:             0B          0B          0B
+[EXIT] 0
+
+--- /proc/meminfo ---
+PATH: /proc/meminfo
+MemTotal:        8113036 kB
+MemFree:         7485512 kB
+MemAvailable:    7600708 kB
+Buffers:           10888 kB
+Cached:           198536 kB
+SwapCached:            0 kB
+Active:            23604 kB
+Inactive:         243604 kB
+Active(anon):        536 kB
+Inactive(anon):   110028 kB
+Active(file):      23068 kB
+Inactive(file):   133576 kB
+Unevictable:       41764 kB
+Mlocked:               0 kB
+SwapTotal:             0 kB
+SwapFree:              0 kB
+Dirty:                12 kB
+Writeback:             0 kB
+AnonPages:         99320 kB
+Mapped:            88152 kB
+Shmem:             52780 kB
+KReclaimable:      41864 kB
+Slab:              80248 kB
+SReclaimable:      41864 kB
+SUnreclaim:        38384 kB
+KernelStack:        4192 kB
+PageTables:         2652 kB
+NFS_Unstable:          0 kB
+Bounce:                0 kB
+WritebackTmp:          0 kB
+CommitLimit:     4056516 kB
+Committed_AS:     533724 kB
+VmallocTotal:   263061440 kB
+VmallocUsed:       15340 kB
+VmallocChunk:          0 kB
+Percpu:             1344 kB
+CmaTotal:         131072 kB
+CmaAllocated:       5760 kB
+CmaReleased:      125312 kB
+CmaFree:          125312 kB
+
+
+--- lsblk inventory (bytes) ---
+MISSING: command not found: lsblk
+
+--- df -hT ---
+$ df -hT
+Filesystem                       Type      Size  Used Avail Use% Mounted on
+/dev/root                        ext4       14G  1.2G   12G   9% /
+devtmpfs                         devtmpfs  3.9G  8.0K  3.9G   1% /dev
+tmpfs                            tmpfs     3.9G  204K  3.9G   1% /tmp
+tmpfs                            tmpfs     3.9G  596K  3.9G   1% /run
+tmpfs                            tmpfs     3.9G  172K  3.9G   1% /var/log
+tmpfs                            tmpfs     3.9G     0  3.9G   0% /dev/shm
+/dev/mmcblk0p7                   ext4      121M   12M  103M  11% /oem
+/dev/mmcblk0p8                   ext4       43G  312K   42G   1% /userdata
+192.168.50.1:/home/liu/linux/nfs nfs        28G   17G   11G  62% /mnt/nfs
+[EXIT] 0
+
+--- findmnt filesystem tree ---
+MISSING: command not found: findmnt
+
+--- MMC/eMMC sysfs identity (bounded) ---
+
+[/sys/block/mmcblk0]
+type=MMC
+name=C9A611
+manfid=0x0000d6
+oemid=0x2903
+cid=d62903433941363131110adf8ff02c00
+csd=d0ffff329f5903ffffffffef96400000
+date=02/2025
+rev=0x8
+size=122224640
+ro=0
+
+[/sys/block/mmcblk0boot0]
+type=MISSING
+name=MISSING
+manfid=MISSING
+oemid=MISSING
+cid=MISSING
+csd=MISSING
+date=MISSING
+rev=MISSING
+size=8192
+ro=1
+
+[/sys/block/mmcblk0boot1]
+type=MISSING
+name=MISSING
+manfid=MISSING
+oemid=MISSING
+cid=MISSING
+csd=MISSING
+date=MISSING
+rev=MISSING
+size=8192
+ro=1
+
+==================== partition_map.txt ====================
+
+================================================================================
+Partition and mount evidence
+================================================================================
+
+--- lsblk partition map ---
+MISSING: command not found: lsblk
+
+--- /proc/partitions ---
+PATH: /proc/partitions
+major minor  #blocks  name
+
+   1        0       4096 ram0
+ 179        0   61112320 mmcblk0
+ 179        1       4096 mmcblk0p1
+ 179        2       4096 mmcblk0p2
+ 179        3      65536 mmcblk0p3
+ 179        4     131072 mmcblk0p4
+ 179        5      32768 mmcblk0p5
+ 179        6   14680064 mmcblk0p6
+ 179        7     131072 mmcblk0p7
+ 179        8   46055407 mmcblk0p8
+
+
+--- findmnt -A ---
+MISSING: command not found: findmnt
+
+--- mount output ---
+$ mount
+/dev/mmcblk0p6 on / type ext4 (rw,relatime)
+devtmpfs on /dev type devtmpfs (rw,relatime,size=3987064k,nr_inodes=996766,mode=755)
+proc on /proc type proc (rw,relatime)
+tmpfs on /tmp type tmpfs (rw,relatime,size=4055992k,nr_inodes=1013998)
+tmpfs on /run type tmpfs (rw,nosuid,nodev,relatime,size=4055992k,nr_inodes=1013998,mode=755)
+tmpfs on /var/log type tmpfs (rw,nosuid,nodev,relatime,size=4055992k,nr_inodes=1013998,mode=755)
+devpts on /dev/pts type devpts (rw,relatime,gid=5,mode=620,ptmxmode=000)
+tmpfs on /dev/shm type tmpfs (rw,nosuid,nodev,noexec,relatime,size=4055992k,nr_inodes=1013998)
+sysfs on /sys type sysfs (rw,nosuid,nodev,noexec,relatime)
+configfs on /sys/kernel/config type configfs (rw,relatime)
+debugfs on /sys/kernel/debug type debugfs (rw,relatime)
+pstore on /sys/fs/pstore type pstore (rw,nosuid,nodev,noexec,relatime)
+/dev/mmcblk0p7 on /oem type ext4 (rw,relatime)
+/dev/mmcblk0p8 on /userdata type ext4 (rw,relatime)
+adb on /dev/usb-ffs/adb type functionfs (rw,relatime)
+192.168.50.1:/home/liu/linux/nfs on /mnt/nfs type nfs (rw,relatime,vers=3,rsize=524288,wsize=524288,namlen=255,hard,nolock,proto=tcp,timeo=600,retrans=2,sec=sys,mountaddr=192.168.50.1,mountvers=3,mountport=43219,mountproto=tcp,local_lock=all,addr=192.168.50.1)
+[EXIT] 0
+
+==================== network.txt ====================
+
+================================================================================
+Network evidence
+================================================================================
+
+--- ip -details link show ---
+$ ip -details link show
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00 promiscuity 0 minmtu 0 maxmtu 0 addrgenmode eui64 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 
+2: can0: <NOARP,ECHO> mtu 16 qdisc noop state DOWN mode DEFAULT group default qlen 10
+    link/can  promiscuity 0 minmtu 0 maxmtu 0 
+    can state STOPPED (berr-counter tx 0 rx 0) restart-ms 1 
+	  rockchip_canfd: tseg1 1..128 tseg2 1..128 sjw 1..128 brp 1..256 brp-inc 2
+	  clock 99000000 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 
+3: eth0: <NO-CARRIER,BROADCAST,MULTICAST,DYNAMIC,UP> mtu 1500 qdisc mq state DOWN mode DEFAULT group default qlen 1000
+    link/ether 7a:a5:c5:39:96:03 brd ff:ff:ff:ff:ff:ff promiscuity 0 minmtu 46 maxmtu 9000 addrgenmode eui64 numtxqueues 8 numrxqueues 8 gso_max_size 65536 gso_max_segs 65535 
+4: eth1: <BROADCAST,MULTICAST,DYNAMIC,UP,LOWER_UP> mtu 1500 qdisc mq state UP mode DEFAULT group default qlen 1000
+    link/ether 7e:a5:c5:39:96:03 brd ff:ff:ff:ff:ff:ff promiscuity 0 minmtu 46 maxmtu 9000 addrgenmode eui64 numtxqueues 8 numrxqueues 8 gso_max_size 65536 gso_max_segs 65535 
+5: wlan0: <BROADCAST,MULTICAST,DYNAMIC> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether 4c:a3:8f:7e:7e:92 brd ff:ff:ff:ff:ff:ff promiscuity 0 minmtu 68 maxmtu 1500 addrgenmode eui64 numtxqueues 4 numrxqueues 4 gso_max_size 65536 gso_max_segs 65535 
+[EXIT] 0
+
+--- ip address show ---
+$ ip address show
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host 
+       valid_lft forever preferred_lft forever
+2: can0: <NOARP,ECHO> mtu 16 qdisc noop state DOWN group default qlen 10
+    link/can 
+3: eth0: <NO-CARRIER,BROADCAST,MULTICAST,DYNAMIC,UP> mtu 1500 qdisc mq state DOWN group default qlen 1000
+    link/ether 7a:a5:c5:39:96:03 brd ff:ff:ff:ff:ff:ff
+4: eth1: <BROADCAST,MULTICAST,DYNAMIC,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
+    link/ether 7e:a5:c5:39:96:03 brd ff:ff:ff:ff:ff:ff
+    inet 169.254.226.253/16 brd 169.254.255.255 scope global eth1
+       valid_lft forever preferred_lft forever
+    inet 192.168.50.2/24 scope global eth1
+       valid_lft forever preferred_lft forever
+    inet6 fe80::7ca5:c5ff:fe39:9603/64 scope link 
+       valid_lft forever preferred_lft forever
+5: wlan0: <BROADCAST,MULTICAST,DYNAMIC> mtu 1500 qdisc noop state DOWN group default qlen 1000
+    link/ether 4c:a3:8f:7e:7e:92 brd ff:ff:ff:ff:ff:ff
+[EXIT] 0
+
+--- ip route show table all ---
+$ ip route show table all
+0.0.0.0 dev eth1 scope link 
+default dev eth1 scope link 
+169.254.0.0/16 dev eth1 proto kernel scope link src 169.254.226.253 
+192.168.50.0/24 dev eth1 proto kernel scope link src 192.168.50.2 
+broadcast 127.0.0.0 dev lo table local proto kernel scope link src 127.0.0.1 
+local 127.0.0.0/8 dev lo table local proto kernel scope host src 127.0.0.1 
+local 127.0.0.1 dev lo table local proto kernel scope host src 127.0.0.1 
+broadcast 127.255.255.255 dev lo table local proto kernel scope link src 127.0.0.1 
+broadcast 169.254.0.0 dev eth1 table local proto kernel scope link src 169.254.226.253 
+local 169.254.226.253 dev eth1 table local proto kernel scope host src 169.254.226.253 
+broadcast 169.254.255.255 dev eth1 table local proto kernel scope link src 169.254.226.253 
+broadcast 192.168.50.0 dev eth1 table local proto kernel scope link src 192.168.50.2 
+local 192.168.50.2 dev eth1 table local proto kernel scope host src 192.168.50.2 
+broadcast 192.168.50.255 dev eth1 table local proto kernel scope link src 192.168.50.2 
+local ::1 dev lo proto kernel metric 0 pref medium
+local fe80::7ca5:c5ff:fe39:9603 dev eth1 proto kernel metric 0 pref medium
+fe80::/64 dev eth1 proto kernel metric 256 pref medium
+multicast ff00::/8 dev eth1 proto kernel metric 256 pref medium
+[EXIT] 0
+
+--- ip -6 route show table all ---
+$ ip -6 route show table all
+local ::1 dev lo proto kernel metric 0 pref medium
+local fe80::7ca5:c5ff:fe39:9603 dev eth1 proto kernel metric 0 pref medium
+fe80::/64 dev eth1 proto kernel metric 256 pref medium
+multicast ff00::/8 dev eth1 proto kernel metric 256 pref medium
+[EXIT] 0
+
+--- /etc/resolv.conf ---
+PATH: /etc/resolv.conf
+# Generated by Connection Manager
+nameserver ::1
+nameserver 127.0.0.1
+
+
+--- /proc/net/dev ---
+PATH: /proc/net/dev
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo:   41388     682    0    0    0     0          0         0    41388     682    0    0    0     0       0          0
+  can0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+  eth0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+  eth1:   91175     273    0    0    0     0          0         0    89300     340    0    0    0     0       0          0
+ wlan0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+
+
+==================== device_nodes.txt ====================
+
+================================================================================
+Device-node summary
+================================================================================
+NOTE: device nodes are only listed; none are opened.
+
+--- Video nodes ---
+crw-rw---- 1 root video 81,  0 Jan  1 08:00 /dev/video0
+crw-rw---- 1 root video 81,  1 Jan  1 08:00 /dev/video1
+crw-rw---- 1 root video 81, 10 Jan  1 08:00 /dev/video10
+crw-rw---- 1 root video 81, 11 Jan  1 08:00 /dev/video11
+crw-rw---- 1 root video 81, 12 Jan  1 08:00 /dev/video12
+crw-rw---- 1 root video 81, 13 Jan  1 08:00 /dev/video13
+crw-rw---- 1 root video 81, 14 Jan  1 08:00 /dev/video14
+crw-rw---- 1 root video 81, 15 Jan  1 08:00 /dev/video15
+crw-rw---- 1 root video 81, 16 Jan  1 08:00 /dev/video16
+crw-rw---- 1 root video 81, 17 Jan  1 08:00 /dev/video17
+crw-rw---- 1 root video 81, 18 Jan  1 08:00 /dev/video18
+crw-rw---- 1 root video 81, 19 Jan  1 08:00 /dev/video19
+crw-rw---- 1 root video 81,  2 Jan  1 08:00 /dev/video2
+crw-rw---- 1 root video 81, 20 Jan  1 08:00 /dev/video20
+crw-rw---- 1 root video 81, 21 Jan  1 08:00 /dev/video21
+crw-rw---- 1 root video 81, 22 Jan  1 08:00 /dev/video22
+crw-rw---- 1 root video 81, 23 Jan  1 08:00 /dev/video23
+crw-rw---- 1 root video 81, 24 Jan  1 08:00 /dev/video24
+crw-rw---- 1 root video 81, 25 Jan  1 08:00 /dev/video25
+crw-rw---- 1 root video 81, 26 Jan  1 08:00 /dev/video26
+crw-rw---- 1 root video 81, 27 Jan  1 08:00 /dev/video27
+crw-rw---- 1 root video 81, 28 Jan  1 08:00 /dev/video28
+crw-rw---- 1 root video 81, 29 Jan  1 08:00 /dev/video29
+crw-rw---- 1 root video 81,  3 Jan  1 08:00 /dev/video3
+crw-rw---- 1 root video 81, 30 Jan  1 08:00 /dev/video30
+crw-rw---- 1 root video 81, 31 Jan  1 08:00 /dev/video31
+crw-rw---- 1 root video 81, 32 Jan  1 08:00 /dev/video32
+crw-rw---- 1 root video 81, 33 Jan  1 08:00 /dev/video33
+crw-rw---- 1 root video 81, 34 Jan  1 08:00 /dev/video34
+crw-rw---- 1 root video 81, 35 Jan  1 08:00 /dev/video35
+crw-rw---- 1 root video 81, 36 Jan  1 08:00 /dev/video36
+crw-rw---- 1 root video 81, 37 Jan  1 08:00 /dev/video37
+crw-rw---- 1 root video 81, 38 Jan  1 08:00 /dev/video38
+crw-rw---- 1 root video 81, 39 Jan  1 08:00 /dev/video39
+crw-rw---- 1 root video 81,  4 Jan  1 08:00 /dev/video4
+crw-rw---- 1 root video 81, 40 Jan  1 08:00 /dev/video40
+crw-rw---- 1 root video 81,  5 Jan  1 08:00 /dev/video5
+crw-rw---- 1 root video 81,  6 Jan  1 08:00 /dev/video6
+crw-rw---- 1 root video 81,  7 Jan  1 08:00 /dev/video7
+crw-rw---- 1 root video 81,  8 Jan  1 08:00 /dev/video8
+crw-rw---- 1 root video 81,  9 Jan  1 08:00 /dev/video9
+lrwxrwxrwx 1 root root       7 Jan  1 08:00 /dev/video-camera0 -> video31
+-rw-r--r-- 1 root root       4 Jan  1 08:00 /dev/video-dec0
+-rw-r--r-- 1 root root       4 Jan  1 08:00 /dev/video-enc0
+
+
+
+
+	ACT1 [-a] ACT2	If ACT1 fails, stop, else do ACT2
+	ACT1 -o ACT2	If ACT1 succeeds, stop, else do ACT2
+	! ACT		Invert ACT's success/failure
+Actions:
+	( ACTIONS )	Group actions for -o / -a
+			actions to command line arguments only
+	-amin MINS	atime +N/-N/N minutes in the past
+	-atime DAYS	atime +N/-N/N days in the past
+BusyBox v1.36.0 (2025-01-16 10:31:11 CST) multi-call binary.
+	-cmin MINS	ctime +N/-N/N minutes in the past
+	-ctime DAYS	ctime +N/-N/N days in the past
+Defaults: PATH is current directory, action is '-print'
+	-depth		Act on directory *after* traversing it
+	-empty		Match empty file/directory
+	-exec CMD ARG ;	Run CMD with all instances of {} replaced by
+	-exec CMD ARG + Run CMD with {} replaced by list of file names
+	-executable	File is executable
+			file name. Fails if CMD exits with nonzero
+find: unrecognized: -printf
+First failed action stops processing of current file.
+	-group NAME/ID	File is owned by given group
+	-H		...on command line only
+If none of the following actions is specified, -print is assumed
+	-iname PATTERN	Case insensitive -name
+	-ipath PATTERN	Case insensitive -path
+	-L,-follow	Follow symlinks
+	-maxdepth N	Descend at most N levels. -maxdepth 0 applies
+	-mindepth N	Don't act on first N levels
+	-mmin MINS	mtime is greater than (+N), less than (-N),
+	-mtime DAYS	mtime is greater than (+N), less than (-N),
+	-name PATTERN	Match file name (w/o directory name) to PATTERN
+	-newer FILE	mtime is more recent than FILE's
+			+/-N: file size is bigger/smaller than N
+			Note: -a has higher priority than -o
+			or exactly MASK bits are set in file's mode
+			or exactly N days in the past
+			or exactly N minutes in the past
+	-path PATTERN	Match path to PATTERN
+	-perm MASK	At least one mask bit (+MASK), all bits (-MASK),
+	-print0		Print file name, NUL terminated
+	-print		Print file name
+	-prune		If current file is directory, don't descend into it
+	-quit		Exit
+	-regex PATTERN	Match path to regex PATTERN
+	-samefile FILE	File is same as FILE
+Search for files and perform actions on them.
+	-size N[bck]	File size is N (c:bytes,k:kbytes,b:512 bytes(def.))
+	-type X		File type is X (one of: f,d,l,b,c,s,p)
+Usage: find [-HL] [PATH]... [OPTIONS] [ACTIONS]
+	-user NAME/ID	File is owned by given user
+	-xdev		Don't descend directories on other filesystems
+
+--- UART/serial candidate nodes ---
+crw-rw---- 1 root dialout 4, 67 Jan  1 08:00 /dev/ttyS3
+crw-rw---- 1 root dialout 253, 0 Jan  1 08:00 /dev/ttyFIQ0
+
+--- /proc/tty/driver/serial (read-only) ---
+serinfo:1.0 driver revision:
+3: uart:16550A mmio:0xFEB60000 irq:109 tx:0 rx:0
+
+--- CAN network interfaces ---
+2: can0: <NOARP,ECHO> mtu 16 qdisc noop state DOWN mode DEFAULT group default qlen 10
+    link/can  promiscuity 0 minmtu 0 maxmtu 0 
+    can state STOPPED (berr-counter tx 0 rx 0) restart-ms 1 
+	  rockchip_canfd: tseg1 1..128 tseg2 1..128 sjw 1..128 brp 1..256 brp-inc 2
+	  clock 99000000 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 
+
+--- NPU/media candidate nodes ---
+crw-rw---- 1 root video 241, 0 Jan  1 08:00 /dev/mpp_service
+total 0
+lrwxrwxrwx 1 root root  8 Jan  1 08:00 platform-display-subsystem-card -> ../card0
+lrwxrwxrwx 1 root root 13 Jan  1 08:00 platform-display-subsystem-render -> ../renderD128
+lrwxrwxrwx 1 root root  8 Jan  1 08:00 platform-fdab0000.npu-card -> ../card1
+lrwxrwxrwx 1 root root 13 Jan  1 08:00 platform-fdab0000.npu-render -> ../renderD129
+crw-rw---- 1 root video 226, 0 Jan  1 08:00 /dev/dri/card0
+crw-rw---- 1 root video 226, 1 Jan  1 08:00 /dev/dri/card1
+crw-rw-rw- 1 root video 226, 128 Jan  1 08:00 /dev/dri/renderD128
+crw-rw-rw- 1 root video 226, 129 Jan  1 08:00 /dev/dri/renderD129
+
+--- TTY sysfs names (maximum 240) ---
+
+
+
+
+	ACT1 [-a] ACT2	If ACT1 fails, stop, else do ACT2
+	ACT1 -o ACT2	If ACT1 succeeds, stop, else do ACT2
+	! ACT		Invert ACT's success/failure
+Actions:
+	( ACTIONS )	Group actions for -o / -a
+			actions to command line arguments only
+	-amin MINS	atime +N/-N/N minutes in the past
+	-atime DAYS	atime +N/-N/N days in the past
+BusyBox v1.36.0 (2025-01-16 10:31:11 CST) multi-call binary.
+	-cmin MINS	ctime +N/-N/N minutes in the past
+	-ctime DAYS	ctime +N/-N/N days in the past
+Defaults: PATH is current directory, action is '-print'
+	-depth		Act on directory *after* traversing it
+	-empty		Match empty file/directory
+	-exec CMD ARG ;	Run CMD with all instances of {} replaced by
+	-exec CMD ARG + Run CMD with {} replaced by list of file names
+	-executable	File is executable
+			file name. Fails if CMD exits with nonzero
+find: unrecognized: -printf
+First failed action stops processing of current file.
+	-group NAME/ID	File is owned by given group
+	-H		...on command line only
+If none of the following actions is specified, -print is assumed
+	-iname PATTERN	Case insensitive -name
+	-ipath PATTERN	Case insensitive -path
+	-L,-follow	Follow symlinks
+	-maxdepth N	Descend at most N levels. -maxdepth 0 applies
+	-mindepth N	Don't act on first N levels
+	-mmin MINS	mtime is greater than (+N), less than (-N),
+	-mtime DAYS	mtime is greater than (+N), less than (-N),
+	-name PATTERN	Match file name (w/o directory name) to PATTERN
+	-newer FILE	mtime is more recent than FILE's
+			+/-N: file size is bigger/smaller than N
+			Note: -a has higher priority than -o
+			or exactly MASK bits are set in file's mode
+			or exactly N days in the past
+			or exactly N minutes in the past
+	-path PATTERN	Match path to PATTERN
+	-perm MASK	At least one mask bit (+MASK), all bits (-MASK),
+	-print0		Print file name, NUL terminated
+	-print		Print file name
+	-prune		If current file is directory, don't descend into it
+	-quit		Exit
+	-regex PATTERN	Match path to regex PATTERN
+	-samefile FILE	File is same as FILE
+Search for files and perform actions on them.
+	-size N[bck]	File size is N (c:bytes,k:kbytes,b:512 bytes(def.))
+	-type X		File type is X (one of: f,d,l,b,c,s,p)
+Usage: find [-HL] [PATH]... [OPTIONS] [ACTIONS]
+	-user NAME/ID	File is owned by given user
+	-xdev		Don't descend directories on other filesystems
+
+==================== tool_versions.txt ====================
+
+================================================================================
+Compiler and build-tool inventory
+================================================================================
+
+--- gcc ---
+MISSING
+
+--- g++ ---
+MISSING
+
+--- cc ---
+MISSING
+
+--- c++ ---
+MISSING
+
+--- make ---
+path=/usr/bin/make
+GNU Make 4.2.1
+Built for aarch64-buildroot-linux-gnu
+Copyright (C) 1988-2016 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+exit=0
+
+--- cmake ---
+MISSING
+
+--- pkg-config ---
+MISSING
+
+--- ld ---
+MISSING
+
+--- as ---
+MISSING
+
+--- ar ---
+path=/usr/bin/ar
+ar: unrecognized option '--version'
+BusyBox v1.36.0 (2025-01-16 10:31:11 CST) multi-call binary.
+
+Usage: ar x|p|t|r [-ov] ARCHIVE [FILE]...
+
+Extract or list FILEs from an ar archive, or create it
+
+	x	Extract
+	p	Extract to stdout
+	t	List
+	r	Create
+	-o	Restore mtime
+	-v	Verbose
+exit=1
+
+--- readelf ---
+MISSING
+
+--- objdump ---
+MISSING
+
+--- file ---
+path=/usr/bin/file
+file-5.38
+magic file from /usr/share/misc/magic
+exit=0
+
+--- git ---
+MISSING
+
+==================== rknpu_driver.txt ====================
+
+================================================================================
+RKNPU kernel-driver inventory
+================================================================================
+NOTE: no module is loaded, unloaded, or modified by this collector.
+
+--- Loaded modules filtered for RKNPU/NPU ---
+$ bash -c lsmod\ 2\>\&1\ \|\ grep\ -Eai\ \'\(\^\|\[\[:space:\]\]\)\(rknpu\|npu\)\(\[\[:space:\]\]\|\$\)\'\ \|\|\ true
+[EXIT] 0
+
+--- Matching /sys/module entries ---
+
+--- modinfo rknpu (metadata only) ---
+$ modinfo rknpu
+modinfo: ERROR: Module alias rknpu not found.
+[EXIT] 1 (continued; no system changes were attempted)
+
+--- Kernel configuration evidence for RKNPU/NPU ---
+# CONFIG_RFKILL_INPUT is not set
+CONFIG_INPUT=y
+CONFIG_INPUT_LEDS=y
+CONFIG_INPUT_FF_MEMLESS=y
+# CONFIG_INPUT_POLLDEV is not set
+# CONFIG_INPUT_SPARSEKMAP is not set
+# CONFIG_INPUT_MATRIXKMAP is not set
+# CONFIG_INPUT_MOUSEDEV is not set
+# CONFIG_INPUT_JOYDEV is not set
+CONFIG_INPUT_EVDEV=y
+# CONFIG_INPUT_EVBUG is not set
+CONFIG_INPUT_KEYBOARD=y
+CONFIG_INPUT_MOUSE=y
+# CONFIG_INPUT_JOYSTICK is not set
+# CONFIG_INPUT_TABLET is not set
+CONFIG_INPUT_TOUCHSCREEN=y
+CONFIG_INPUT_MISC=y
+# CONFIG_INPUT_AD714X is not set
+# CONFIG_INPUT_ATMEL_CAPTOUCH is not set
+# CONFIG_INPUT_BMA150 is not set
+# CONFIG_INPUT_E3X0_BUTTON is not set
+# CONFIG_INPUT_MMA8450 is not set
+# CONFIG_INPUT_GPIO_BEEPER is not set
+# CONFIG_INPUT_GPIO_DECODER is not set
+# CONFIG_INPUT_GPIO_VIBRA is not set
+# CONFIG_INPUT_ATI_REMOTE2 is not set
+# CONFIG_INPUT_KEYSPAN_REMOTE is not set
+# CONFIG_INPUT_KXTJ9 is not set
+# CONFIG_INPUT_POWERMATE is not set
+# CONFIG_INPUT_YEALINK is not set
+# CONFIG_INPUT_CM109 is not set
+# CONFIG_INPUT_REGULATOR_HAPTIC is not set
+CONFIG_INPUT_UINPUT=y
+# CONFIG_INPUT_PCF8574 is not set
+# CONFIG_INPUT_PWM_BEEPER is not set
+# CONFIG_INPUT_PWM_VIBRA is not set
+CONFIG_INPUT_RK805_PWRKEY=y
+# CONFIG_INPUT_GPIO_ROTARY_ENCODER is not set
+# CONFIG_INPUT_ADXL34X is not set
+# CONFIG_INPUT_IMS_PCU is not set
+# CONFIG_INPUT_IQS269A is not set
+# CONFIG_INPUT_CMA3000 is not set
+# CONFIG_INPUT_DRV260X_HAPTICS is not set
+# CONFIG_INPUT_DRV2665_HAPTICS is not set
+# CONFIG_INPUT_DRV2667_HAPTICS is not set
+# CONFIG_USB_VIDEO_CLASS_INPUT_EVDEV is not set
+CONFIG_SND_JACK_INPUT_DEV=y
+# CONFIG_VIRTIO_INPUT is not set
+CONFIG_ROCKCHIP_RKNPU=y
+CONFIG_ROCKCHIP_RKNPU_DEBUG_FS=y
+# CONFIG_ROCKCHIP_RKNPU_PROC_FS is not set
+# CONFIG_ROCKCHIP_RKNPU_FENCE is not set
+# CONFIG_ROCKCHIP_RKNPU_SRAM is not set
+CONFIG_ROCKCHIP_RKNPU_DRM_GEM=y
+
+--- Matching platform-driver entries ---
+
+--- NPU/RKNPU kernel log lines (maximum 400) ---
+[    5.241045] RKNPU fdab0000.npu: Adding to iommu group 0
+[    5.241285] RKNPU fdab0000.npu: RKNPU: rknpu iommu is enabled, using iommu mode
+[    5.242836] RKNPU fdab0000.npu: can't request region for resource [mem 0xfdab0000-0xfdabffff]
+[    5.242872] RKNPU fdab0000.npu: can't request region for resource [mem 0xfdac0000-0xfdacffff]
+[    5.242896] RKNPU fdab0000.npu: can't request region for resource [mem 0xfdad0000-0xfdadffff]
+[    5.243644] [drm] Initialized rknpu 0.9.2 20231018 for fdab0000.npu on minor 1
+[    5.248414] RKNPU fdab0000.npu: RKNPU: bin=0
+[    5.248643] RKNPU fdab0000.npu: leakage=10
+[    5.248786] debugfs: Directory 'fdab0000.npu-rknpu' with parent 'vdd_npu_s0' already present!
+[    5.257835] RKNPU fdab0000.npu: pvtm=903
+[    5.264200] RKNPU fdab0000.npu: pvtm-volt-sel=4
+[    5.266868] RKNPU fdab0000.npu: avs=0
+[    5.267341] RKNPU fdab0000.npu: l=10000 h=85000 hyst=5000 l_limit=0 h_limit=800000000 h_table=0
+[    5.278575] RKNPU fdab0000.npu: failed to find power_model node
+[    5.278667] RKNPU fdab0000.npu: RKNPU: failed to initialize power model
+[    5.278692] RKNPU fdab0000.npu: RKNPU: failed to get dynamic-coefficient
+
+--- NPU candidate device nodes ---
+crw-rw---- 1 root video 241, 0 Jan  1 08:00 /dev/mpp_service
+
+==================== rknn_runtime.txt ====================
+
+================================================================================
+RKNN Runtime and rknn_server inventory
+================================================================================
+NOTE: this collector does not execute rknn_server and does not load librknnrt.so.
+
+--- Dynamic linker cache entries ---
+	librknnrt.so (libc6,AArch64) => /lib/librknnrt.so
+
+--- Bounded Runtime/server search roots ---
+SCAN_ROOT: /usr
+SCAN_ROOT: /lib
+SCAN_ROOT: /lib64
+SCAN_ROOT: /opt
+
+[FOUND] /usr/bin/rknn_server
+-rwxr-xr-x 1 root root 439504 Jan 16  2025 /usr/bin/rknn_server
+/usr/bin/rknn_server: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0, BuildID[sha1]=f840fa8a1b13b1c64fc7013c96555e31355c53d1, stripped
+70310696d606e71bd44f1fcc5df07f65b628e8c19e7f750efff967f36f02ae69  /usr/bin/rknn_server
+MISSING or NOT_APPLICABLE: readelf unavailable or path is not a regular file
+
+[FOUND] /usr/lib/librknnrt.so
+-rw-r--r-- 1 root root 5241144 Jan 16  2025 /usr/lib/librknnrt.so
+/usr/lib/librknnrt.so: ELF 64-bit LSB shared object, ARM aarch64, version 1 (GNU/Linux), statically linked, BuildID[sha1]=7795f7cdc39c0c9f016ac0e22093bc96efd632f6, stripped
+9f53d7b1941338242e227fb097496261049c3aa1d8f2f343b27e439c325f6990  /usr/lib/librknnrt.so
+MISSING or NOT_APPLICABLE: readelf unavailable or path is not a regular file
+
+--- rknn_server process/status evidence ---
+root      1386  1354  3 08:00 ?        00:00:26 rknn_server
+NOT_APPLICABLE: systemctl command not found
+
+==================== manifest.sha256 ====================
+bf4a171ea58423a182a940f2c2fb4e2aaf074888223a1710dea5035ca380352d  /mnt/nfs/visionarm_logs/v1_env/board_identity.txt
+ced103ddaabc58a197435fc6d9337e0807118177f1497f70249c31ec2c037fa4  /mnt/nfs/visionarm_logs/v1_env/boot_full.log
+906c1db2d0da36d9dc6b5bcf404a147735eacd27ae57b19dbac9775877fad7ea  /mnt/nfs/visionarm_logs/v1_env/cpuinfo.txt
+43f25119897ae597eca0506b5ea0fd40df193dcaa70d1888cee1b0c3c442e5e2  /mnt/nfs/visionarm_logs/v1_env/device_nodes.txt
+09092db64bf17edf02bf09e39a34d74ae124726e85bed53f8276bf7e1fba1643  /mnt/nfs/visionarm_logs/v1_env/device_tree.txt
+9d8f2b3635eb8d7ef43f5a8526b269c34141f4632e7bfda68abd9e6939324612  /mnt/nfs/visionarm_logs/v1_env/dmesg.log
+708c371fe238bd89a6ac3482f0814bb08c2b77193fd87aed31f6443038fc3868  /mnt/nfs/visionarm_logs/v1_env/journal_boot.log
+d980a2dd1b321697f9f827ab5522e42b97cbb20e347f303cde9a21c2abf6692c  /mnt/nfs/visionarm_logs/v1_env/memory_storage.txt
+29ad13e86414a9a97bc17e8bd89da1b6468cbfb02ca441d34c1ea55c06f95ac3  /mnt/nfs/visionarm_logs/v1_env/network.txt
+2b05c2c45d74fe77e9036ce584f7b93385402c14968b97e81aea50e8e994d437  /mnt/nfs/visionarm_logs/v1_env/os_release.txt
+7a151e2c8392948b6513b4f9fdcef53b4fef9eb1f84a76bfa7f7b816c906dce2  /mnt/nfs/visionarm_logs/v1_env/partition_map.txt
+8c35e351a5a0140f8561e8bc1b74e835d322d30349b4b95a23227d3963d3a0d9  /mnt/nfs/visionarm_logs/v1_env/rknn_runtime.txt
+a55fd42636e06f4cee6d43e8cad1ff2a2902b2f27bbd4c61e199fc570bba9415  /mnt/nfs/visionarm_logs/v1_env/rknpu_driver.txt
+beb2f578bfb89d27dd6d5dfbe51e4d775da773cb22a9713f3ca460cd140d430e  /mnt/nfs/visionarm_logs/v1_env/session_metadata.txt
+7a18343fa94bdb1a942a6870206f0e7b5c33b8544f8115c1fc516dc2cc691ea6  /mnt/nfs/visionarm_logs/v1_env/thermal_power.txt
+9cbcc499bcaa73ddb9e2bfaf81d0930ab7b863c0ea5d94938d704828fdb7b9c2  /mnt/nfs/visionarm_logs/v1_env/tool_versions.txt
+5250d66da86fb29ec8776e1ebddf9e3c85cf681ca72565aeb7484ff80b2bbfdb  /mnt/nfs/visionarm_logs/v1_env/uname.txt
+
+==================== filtered dmesg ====================
+[    1.628044] Machine model: ATK-DLRK3588 Board
+[    1.628107] earlycon: uart8250 at MMIO32 0x00000000feb50000 (options '')
+[    1.632019] printk: bootconsole [uart8250] enabled
+[    1.817280] Kernel command line: storagemedia=emmc androidboot.storagemedia=emmc androidboot.mode=normal  androidboot.verifiedbootstate=orange rw rootwait earlycon=uart8250,mmio32,0xfeb50000 console=ttyFIQ0 irqchip.gicv3_pseudo_nmi=0 root=PARTUUID=614e0000-0000
+[    2.194462] rockchip-gpio fd8a0000.gpio: probed /pinctrl/gpio@fd8a0000
+[    2.195216] rockchip-gpio fec20000.gpio: probed /pinctrl/gpio@fec20000
+[    2.195945] rockchip-gpio fec30000.gpio: probed /pinctrl/gpio@fec30000
+[    2.196673] rockchip-gpio fec40000.gpio: probed /pinctrl/gpio@fec40000
+[    2.197427] rockchip-gpio fec50000.gpio: probed /pinctrl/gpio@fec50000
+[    2.198044] rockchip-pinctrl pinctrl: probed pinctrl
+[    2.211967] printk: bootconsole [uart8250] disabled
+[    2.216916] arm-scmi firmware:scmi: SCMI Protocol v2.0 'rockchip:' Firmware version 0x0
+[    2.219171] rockchip-cpuinfo cpuinfo: SoC		: 35881000
+[    2.219175] rockchip-cpuinfo cpuinfo: Serial		: 770657b44c23be5a
+[    2.466377] rockchip-thermal fec00000.tsadc: Missing rockchip,grf property
+[    2.466747] rockchip-thermal fec00000.tsadc: tsadc is probed successfully!
+[    2.491160] rockchip-csi2-dphy-hw fedc0000.csi2-dphy0-hw: csi2 dphy hw probe successfully!
+[    2.491214] rockchip-csi2-dphy-hw fedc8000.csi2-dphy1-hw: csi2 dphy hw probe successfully!
+[    2.497266] rockchip-hdptx-phy-hdmi fed60000.hdmiphy: hdptx phy init success
+[    2.497796] rockchip-hdptx-phy-hdmi fed70000.hdmiphy: hdptx phy init success
+[    2.500265] mpp_service mpp-srv: f421f8a9774d author: Yandong Lin 2023-09-21 video: rockchip: mpp: rkvenc2: fix slice mode poll failed
+[    2.514947] rockchip-pvtm fda40000.pvtm: pvtm@0 probed
+[    2.514983] rockchip-pvtm fda50000.pvtm: pvtm@1 probed
+[    2.515017] rockchip-pvtm fda60000.pvtm: pvtm@2 probed
+[    2.515051] rockchip-pvtm fdaf0000.pvtm: pvtm@3 probed
+[    2.515083] rockchip-pvtm fdb30000.pvtm: pvtm@4 probed
+[    2.515481] rockchip-system-monitor rockchip-system-monitor: system monitor probe
+[    2.516133] Serial: 8250/16550 driver, 10 ports, IRQ sharing disabled
+[    2.516567] feb60000.serial: ttyS3 at MMIO 0xfeb60000 (irq = 109, base_baud = 1500000) is a 16550A
+[    2.518089] rockchip-vop2 fdd90000.vop: Adding to iommu group 17
+[    2.524883] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp0 assign plane mask: 0x5, primary plane phy id: 2
+[    2.524891] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp1 assign plane mask: 0xa, primary plane phy id: 3
+[    2.524897] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp2 assign plane mask: 0x140, primary plane phy id: 8
+[    2.524902] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp3 assign plane mask: 0x280, primary plane phy id: 9
+[    2.532332] rockchip-drm display-subsystem: bound fdd90000.vop (ops 0xffffffc00932d4a0)
+[    2.532651] dwhdmi-rockchip fde80000.hdmi: registered ddc I2C bus driver
+[    2.532931] rockchip-drm display-subsystem: bound fde80000.hdmi (ops 0xffffffc00933c030)
+[    2.533183] dwhdmi-rockchip fdea0000.hdmi: registered ddc I2C bus driver
+[    2.533438] rockchip-drm display-subsystem: bound fdea0000.hdmi (ops 0xffffffc00933c030)
+[    2.543474] ahci fe210000.sata: port 0 can do FBS, forcing FBSCP
+[    2.544826] rockchip-spi feb20000.spi: no high_speed pinctrl state
+[    2.558335] rockchip-spi feb20000.spi: probed, poll=0, rsd=0, cs-inactive=0, ready=0
+[    2.558977] CAN device driver interface
+[    2.560156] rk_gmac-dwmac fe1b0000.ethernet: IRQ eth_lpi not found
+[    2.560363] rk_gmac-dwmac fe1b0000.ethernet: no regulator found
+[    2.560369] rk_gmac-dwmac fe1b0000.ethernet: clock input or output? (output).
+[    2.560373] rk_gmac-dwmac fe1b0000.ethernet: TX delay(0x43).
+[    2.560378] rk_gmac-dwmac fe1b0000.ethernet: Can not read property: rx_delay.
+[    2.560382] rk_gmac-dwmac fe1b0000.ethernet: set rx_delay to 0xffffffff
+[    2.560397] rk_gmac-dwmac fe1b0000.ethernet: integrated PHY? (no).
+[    2.560401] rk_gmac-dwmac fe1b0000.ethernet: cannot get clock mac_clk_rx
+[    2.560406] rk_gmac-dwmac fe1b0000.ethernet: cannot get clock mac_clk_tx
+[    2.560415] rk_gmac-dwmac fe1b0000.ethernet: cannot get clock clk_mac_speed
+[    2.560630] rk_gmac-dwmac fe1b0000.ethernet: init for RGMII_RXID
+[    2.560686] rk_gmac-dwmac fe1b0000.ethernet: User ID: 0x30, Synopsys ID: 0x51
+[    2.560691] rk_gmac-dwmac fe1b0000.ethernet: 	DWMAC4/5
+[    2.560696] rk_gmac-dwmac fe1b0000.ethernet: DMA HW capability register supported
+[    2.560700] rk_gmac-dwmac fe1b0000.ethernet: RX Checksum Offload Engine supported
+[    2.560704] rk_gmac-dwmac fe1b0000.ethernet: TX Checksum insertion supported
+[    2.560708] rk_gmac-dwmac fe1b0000.ethernet: Wake-Up On Lan supported
+[    2.560730] rk_gmac-dwmac fe1b0000.ethernet: TSO supported
+[    2.560734] rk_gmac-dwmac fe1b0000.ethernet: Enable RX Mitigation via HW Watchdog Timer
+[    2.560739] rk_gmac-dwmac fe1b0000.ethernet: Enabled Flow TC (entries=2)
+[    2.560742] rk_gmac-dwmac fe1b0000.ethernet: TSO feature enabled
+[    2.560747] rk_gmac-dwmac fe1b0000.ethernet: Using 32 bits DMA width
+[    2.693875] rk_gmac-dwmac fe1c0000.ethernet: IRQ eth_lpi not found
+[    2.694080] rk_gmac-dwmac fe1c0000.ethernet: no regulator found
+[    2.694086] rk_gmac-dwmac fe1c0000.ethernet: clock input or output? (output).
+[    2.694090] rk_gmac-dwmac fe1c0000.ethernet: TX delay(0x43).
+[    2.694094] rk_gmac-dwmac fe1c0000.ethernet: Can not read property: rx_delay.
+[    2.694098] rk_gmac-dwmac fe1c0000.ethernet: set rx_delay to 0xffffffff
+[    2.694104] rk_gmac-dwmac fe1c0000.ethernet: integrated PHY? (no).
+[    2.694109] rk_gmac-dwmac fe1c0000.ethernet: cannot get clock mac_clk_rx
+[    2.694114] rk_gmac-dwmac fe1c0000.ethernet: cannot get clock mac_clk_tx
+[    2.694123] rk_gmac-dwmac fe1c0000.ethernet: cannot get clock clk_mac_speed
+[    2.694337] rk_gmac-dwmac fe1c0000.ethernet: init for RGMII_RXID
+[    2.694392] rk_gmac-dwmac fe1c0000.ethernet: User ID: 0x30, Synopsys ID: 0x51
+[    2.694397] rk_gmac-dwmac fe1c0000.ethernet: 	DWMAC4/5
+[    2.694402] rk_gmac-dwmac fe1c0000.ethernet: DMA HW capability register supported
+[    2.694405] rk_gmac-dwmac fe1c0000.ethernet: RX Checksum Offload Engine supported
+[    2.694409] rk_gmac-dwmac fe1c0000.ethernet: TX Checksum insertion supported
+[    2.694412] rk_gmac-dwmac fe1c0000.ethernet: Wake-Up On Lan supported
+[    2.694435] rk_gmac-dwmac fe1c0000.ethernet: TSO supported
+[    2.694439] rk_gmac-dwmac fe1c0000.ethernet: Enable RX Mitigation via HW Watchdog Timer
+[    2.694443] rk_gmac-dwmac fe1c0000.ethernet: Enabled Flow TC (entries=2)
+[    2.694447] rk_gmac-dwmac fe1c0000.ethernet: TSO feature enabled
+[    2.694451] rk_gmac-dwmac fe1c0000.ethernet: Using 32 bits DMA width
+[    2.856113] usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    2.856125] usb usb1: SerialNumber: fc800000.usb
+[    2.869435] usb usb2: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    2.869446] usb usb2: SerialNumber: fc880000.usb
+[    2.930103] usb usb3: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    2.930114] usb usb3: SerialNumber: fc840000.usb
+[    2.990103] usb usb4: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    2.990115] usb usb4: SerialNumber: fc8c0000.usb
+[    2.990889] usb usb5: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    2.990900] usb usb5: SerialNumber: xhci-hcd.5.auto
+[    2.991244] usb usb6: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    2.991255] usb usb6: SerialNumber: xhci-hcd.5.auto
+[    2.991666] usbcore: registered new interface driver usbserial_generic
+[    2.991676] usbserial: USB Serial support registered for generic
+[    2.991697] usbserial: USB Serial support registered for cp210x
+[    2.991726] usbserial: USB Serial support registered for FTDI USB Serial Device
+[    2.991788] usbserial: USB Serial support registered for Keyspan - (without firmware)
+[    2.991795] usbserial: USB Serial support registered for Keyspan 1 port adapter
+[    2.991801] usbserial: USB Serial support registered for Keyspan 2 port adapter
+[    2.991808] usbserial: USB Serial support registered for Keyspan 4 port adapter
+[    2.991830] usbserial: USB Serial support registered for GSM modem (1-port)
+[    2.991914] usbserial: USB Serial support registered for oti6858
+[    2.991934] usbserial: USB Serial support registered for pl2303
+[    2.991951] usbcore: registered new interface driver qcserial
+[    2.991958] usbserial: USB Serial support registered for Qualcomm USB modem
+[    2.991986] usbserial: USB Serial support registered for Sierra USB modem
+[    3.253669] usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[    3.253695] usb 1-1: SerialNumber: 4CA38F7E7E92
+[    3.266746] usb 2-1: New USB device strings: Mfr=0, Product=2, SerialNumber=0
+[    4.436502] rockchip-mipi-csi2-hw fdd10000.mipi0-csi2-hw: enter mipi csi2 hw probe!
+[    4.436566] rockchip-mipi-csi2-hw fdd10000.mipi0-csi2-hw: probe success, v4l2_dev:mipi0-csi2-hw!
+[    4.436591] rockchip-mipi-csi2-hw fdd20000.mipi1-csi2-hw: enter mipi csi2 hw probe!
+[    4.436630] rockchip-mipi-csi2-hw fdd20000.mipi1-csi2-hw: probe success, v4l2_dev:mipi1-csi2-hw!
+[    4.436651] rockchip-mipi-csi2-hw fdd30000.mipi2-csi2-hw: enter mipi csi2 hw probe!
+[    4.436688] rockchip-mipi-csi2-hw fdd30000.mipi2-csi2-hw: probe success, v4l2_dev:mipi2-csi2-hw!
+[    4.436709] rockchip-mipi-csi2-hw fdd40000.mipi3-csi2-hw: enter mipi csi2 hw probe!
+[    4.436745] rockchip-mipi-csi2-hw fdd40000.mipi3-csi2-hw: probe success, v4l2_dev:mipi3-csi2-hw!
+[    4.436767] rockchip-mipi-csi2-hw fdd50000.mipi4-csi2-hw: enter mipi csi2 hw probe!
+[    4.436806] rockchip-mipi-csi2-hw fdd50000.mipi4-csi2-hw: probe success, v4l2_dev:mipi4-csi2-hw!
+[    4.436826] rockchip-mipi-csi2-hw fdd60000.mipi5-csi2-hw: enter mipi csi2 hw probe!
+[    4.436862] rockchip-mipi-csi2-hw fdd60000.mipi5-csi2-hw: probe success, v4l2_dev:mipi5-csi2-hw!
+[    4.437215] rockchip-mipi-csi2 mipi0-csi2: attach to csi2 hw node
+[    4.437233] rkcif rkcif-mipi-lvds: Entity type for entity rockchip-mipi-csi2 was not initialized!
+[    4.437239] rockchip-mipi-csi2: Async registered subdev
+[    4.437243] rockchip-mipi-csi2: probe success, v4l2_dev:rkcif-mipi-lvds!
+[    4.437347] rockchip-mipi-csi2 mipi2-csi2: attach to csi2 hw node
+[    4.437361] rkcif rkcif-mipi-lvds2: Entity type for entity rockchip-mipi-csi2 was not initialized!
+[    4.437366] rockchip-mipi-csi2: Async registered subdev
+[    4.437369] rockchip-mipi-csi2: probe success, v4l2_dev:rkcif-mipi-lvds2!
+[    4.438181] rkisp_hw fdcb0000.rkisp: Missing rockchip,grf property
+[    4.438513] rkisp_hw fdcc0000.rkisp: Missing rockchip,grf property
+[    4.500325] dwmmc_rockchip fe2c0000.mmc: No normal pinctrl state
+[    4.500335] dwmmc_rockchip fe2c0000.mmc: No idle pinctrl state
+[    4.500481] dwmmc_rockchip fe2c0000.mmc: IDMAC supports 32-bit address mode.
+[    4.500503] dwmmc_rockchip fe2c0000.mmc: Using internal DMA controller.
+[    4.500514] dwmmc_rockchip fe2c0000.mmc: Version ID is 270a
+[    4.500548] dwmmc_rockchip fe2c0000.mmc: DW MMC controller at irq 94,32 bit host data width,256 deep fifo
+[    4.502816] dwmmc_rockchip fe2c0000.mmc: Failed getting OCR mask: -22
+[    4.506950] dwmmc_rockchip fe2c0000.mmc: could not set regulator OCR (-22)
+[    4.506967] dwmmc_rockchip fe2c0000.mmc: failed to enable vmmc regulator
+[    4.527924] rockchip-i2s-tdm fddf0000.i2s: CLK-ALWAYS-ON: mclk: 12288000, bclk: 3072000, fsync: 48000
+[    4.531177] mmc_host mmc1: Bus speed (slot 0) = 400000Hz (slot req 400000Hz, actual 400000HZ div = 0)
+[    4.531730] rockchip-i2s-tdm fddf4000.i2s: CLK-ALWAYS-ON: mclk: 12288000, bclk: 3072000, fsync: 48000
+[    4.532829] mmc0: SDHCI controller on fe2e0000.mmc [fe2e0000.mmc] using ADMA
+[    4.534771] input: rockchip-dp0 rockchip-dp0 as /devices/platform/dp0-sound/sound/card0/input2
+[    4.535664] input: rockchip-dp1 rockchip-dp1 as /devices/platform/dp1-sound/sound/card1/input3
+[    4.547893] input: rockchip,hdmiin rockchip,hdmiin as /devices/platform/hdmiin-sound/sound/card2/input4
+[    4.566871] mmc0: Host Software Queue enabled
+[    4.566904] mmc0: new HS400 Enhanced strobe MMC card at address 0001
+[    4.567407] mmcblk0: mmc0:0001 C9A611 58.3 GiB 
+[    4.567559] mmcblk0boot0: mmc0:0001 C9A611 partition 1 4.00 MiB
+[    4.567704] mmcblk0boot1: mmc0:0001 C9A611 partition 2 4.00 MiB
+[    4.567828] mmcblk0rpmb: mmc0:0001 C9A611 partition 3 16.0 MiB, chardev (236:0)
+[    4.569948]  mmcblk0: p1 p2 p3 p4 p5 p6 p7 p8
+[    4.611009] input: rockchip-es8388 Headset as /devices/platform/es8388-sound/sound/card3/input6
+[    4.612985] can: controller area network core
+[    4.613025] can: raw protocol
+[    4.613032] can: broadcast manager protocol
+[    4.613045] can: netlink gateway - max_hops=1
+[    4.613888] [WLAN_RFKILL]: can't find rockchip,grf property
+[    4.614215] [BT_RFKILL]: bluetooth_platdata_parse_dt: uart_rts_gpios is no-in-use.
+[    4.849579] rockchip-dmc dmc: bin=0
+[    4.849758] rockchip-dmc dmc: leakage=40
+[    4.849771] rockchip-dmc dmc: leakage-volt-sel=1
+[    4.849785] rockchip-dmc dmc: soc version=0, speed=1
+[    4.850625] rockchip-dmc dmc: avs=0
+[    4.850642] rockchip-dmc dmc: current ATF version 0x100
+[    4.850835] rockchip-dmc dmc: normal_rate = 1068000000
+[    4.850844] rockchip-dmc dmc: reboot_rate = 1560000000
+[    4.850851] rockchip-dmc dmc: suspend_rate = 528000000
+[    4.850859] rockchip-dmc dmc: video_4k_rate = 1068000000
+[    4.850866] rockchip-dmc dmc: video_4k_10b_rate = 1068000000
+[    4.850874] rockchip-dmc dmc: video_svep_rate = 1068000000
+[    4.850881] rockchip-dmc dmc: boost_rate = 1560000000
+[    4.850888] rockchip-dmc dmc: fixed_rate(isp|cif0|cif1|dualview) = 1560000000
+[    4.850895] rockchip-dmc dmc: performance_rate = 1560000000
+[    4.850903] rockchip-dmc dmc: hdmirx_rate = 1560000000
+[    4.850913] rockchip-dmc dmc: failed to get vop bandwidth to dmc rate
+[    4.850919] rockchip-dmc dmc: failed to get vop pn to msch rl
+[    4.851030] rockchip-dmc dmc: l=10000 h=2147483647 hyst=5000 l_limit=0 h_limit=0 h_table=0
+[    4.851933] rockchip-dmc dmc: could not find power_model node
+[    4.860287] rockchip-csi2-dphy csi2-dcphy0: csi2 dphy0 probe successfully!
+[    4.860634] rockchip-csi2-dphy csi2-dphy0: csi2 dphy0 probe successfully!
+[    4.866449] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp0 assign plane mask: 0x5, primary plane phy id: 2
+[    4.866482] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp1 assign plane mask: 0xa, primary plane phy id: 3
+[    4.866494] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp2 assign plane mask: 0x140, primary plane phy id: 8
+[    4.866505] rockchip-vop2 fdd90000.vop: [drm:vop2_bind] vp3 assign plane mask: 0x280, primary plane phy id: 9
+[    4.888364] rockchip-drm display-subsystem: bound fdd90000.vop (ops 0xffffffc00932d4a0)
+[    4.889872] dwhdmi-rockchip fde80000.hdmi: registered ddc I2C bus driver
+[    4.891265] rockchip-drm display-subsystem: bound fde80000.hdmi (ops 0xffffffc00933c030)
+[    4.892503] dwhdmi-rockchip fdea0000.hdmi: registered ddc I2C bus driver
+[    4.893708] rockchip-drm display-subsystem: bound fdea0000.hdmi (ops 0xffffffc00933c030)
+[    4.893775] rockchip-drm display-subsystem: bound fde20000.dsi (ops 0xffffffc00933e848)
+[    4.893858] rockchip-drm display-subsystem: bound fde50000.dp (ops 0xffffffc00933ebd8)
+[    4.893923] rockchip-drm display-subsystem: bound fde60000.dp (ops 0xffffffc00933ebd8)
+[    4.897195] rockchip-drm display-subsystem: route-hdmi0: failed to get logo,offset
+[    4.897205] rockchip-drm display-subsystem: route-hdmi1: failed to get logo,offset
+[    4.919226] rockchip-drm display-subsystem: [drm] fb0: rockchipdrmfb frame buffer device
+[    4.920249] [drm] Initialized rockchip 3.0.0 20140818 for display-subsystem on minor 0
+[    4.922478] input: rockchip-hdmi0 rockchip-hdmi0 as /devices/platform/hdmi0-sound/sound/card4/input9
+[    4.923689] input: rockchip-hdmi1 rockchip-hdmi1 as /devices/platform/hdmi1-sound/sound/card5/input10
+[    5.241045] RKNPU fdab0000.npu: Adding to iommu group 0
+[    5.241285] RKNPU fdab0000.npu: RKNPU: rknpu iommu is enabled, using iommu mode
+[    5.242836] RKNPU fdab0000.npu: can't request region for resource [mem 0xfdab0000-0xfdabffff]
+[    5.242872] RKNPU fdab0000.npu: can't request region for resource [mem 0xfdac0000-0xfdacffff]
+[    5.242896] RKNPU fdab0000.npu: can't request region for resource [mem 0xfdad0000-0xfdadffff]
+[    5.243644] [drm] Initialized rknpu 0.9.2 20231018 for fdab0000.npu on minor 1
+[    5.248414] RKNPU fdab0000.npu: RKNPU: bin=0
+[    5.248643] RKNPU fdab0000.npu: leakage=10
+[    5.248786] debugfs: Directory 'fdab0000.npu-rknpu' with parent 'vdd_npu_s0' already present!
+[    5.257835] RKNPU fdab0000.npu: pvtm=903
+[    5.264200] RKNPU fdab0000.npu: pvtm-volt-sel=4
+[    5.266868] RKNPU fdab0000.npu: avs=0
+[    5.267341] RKNPU fdab0000.npu: l=10000 h=85000 hyst=5000 l_limit=0 h_limit=800000000 h_table=0
+[    5.278575] RKNPU fdab0000.npu: failed to find power_model node
+[    5.278667] RKNPU fdab0000.npu: RKNPU: failed to initialize power model
+[    5.278692] RKNPU fdab0000.npu: RKNPU: failed to get dynamic-coefficient
+[    5.284125] rockchip-pm rockchip-suspend: not set pwm-regulator-config
+[    5.284843] rockchip-suspend not set sleep-mode-config for mem-lite
+[    5.284852] rockchip-suspend not set wakeup-config for mem-lite
+[    5.284861] rockchip-suspend not set sleep-mode-config for mem-ultra
+[    5.284868] rockchip-suspend not set wakeup-config for mem-ultra
+[    5.286653]   #0: rockchip-dp0
+[    5.286660]   #1: rockchip-dp1
+[    5.286666]   #2: rockchip,hdmiin
+[    5.286672]   #3: rockchip-es8388
+[    5.286679]   #4: rockchip-hdmi0
+[    5.286686]   #5: rockchip-hdmi1
+[    5.328738] EXT4-fs (mmcblk0p6): recovery complete
+[    5.328985] EXT4-fs (mmcblk0p6): mounted filesystem with ordered data mode. Opts: (null)
+[    5.353131]     storagemedia=emmc
+[    5.390654] EXT4-fs (mmcblk0p6): re-mounted. Opts: (null)
+[    5.465238] EXT4-fs (mmcblk0p7): recovery complete
+[    5.465583] EXT4-fs (mmcblk0p7): mounted filesystem with ordered data mode. Opts: (null)
+[    5.534401] EXT4-fs (mmcblk0p8): recovery complete
+[    5.535055] EXT4-fs (mmcblk0p8): mounted filesystem with ordered data mode. Opts: (null)
+[    5.775351] EXT4-fs (mmcblk0p7): mounted filesystem with ordered data mode. Opts: (null)
+[    5.917730] EXT4-fs (mmcblk0p8): mounted filesystem with ordered data mode. Opts: (null)
+[    6.637216] rk_hdmirx fdee0000.hdmirx-controller: hdmirx_cancel_cpu_limit_freq freq qos nod add
+[    7.380812] rtk_btusb: btusb_probe can_wakeup 0, may wakeup 0
+[    7.498413] rk_gmac-dwmac fe1b0000.ethernet eth0: PHY [stmmac-0:01] driver [YT8531 Gigabit Ethernet] (irq=POLL)
+[    7.500490] rk_gmac-dwmac fe1b0000.ethernet eth0: No Safety Features support found
+[    7.500511] rk_gmac-dwmac fe1b0000.ethernet eth0: IEEE 1588-2008 Advanced Timestamp supported
+[    7.500735] rk_gmac-dwmac fe1b0000.ethernet eth0: registered PTP clock
+[    7.501096] rk_gmac-dwmac fe1b0000.ethernet eth0: configuring for phy/rgmii-rxid link mode
+[    7.507497] rk_gmac-dwmac fe1c0000.ethernet eth1: PHY [stmmac-1:01] driver [YT8531 Gigabit Ethernet] (irq=POLL)
+[    7.508944] rk_gmac-dwmac fe1c0000.ethernet eth1: No Safety Features support found
+[    7.508977] rk_gmac-dwmac fe1c0000.ethernet eth1: IEEE 1588-2008 Advanced Timestamp supported
+[    7.509196] rk_gmac-dwmac fe1c0000.ethernet eth1: registered PTP clock
+[    7.509846] rk_gmac-dwmac fe1c0000.ethernet eth1: configuring for phy/rgmii-rxid link mode
+[   11.561892] rk_gmac-dwmac fe1c0000.ethernet eth1: Link is Up - 1Gbps/Full - flow control rx/tx

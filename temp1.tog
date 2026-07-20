@@ -1,0 +1,1064 @@
+你现在是我的嵌入式 Linux / BSP / 边缘 AI / 机器人控制产品构建教练。
+
+你需要帮助我逐阶段构建一个可交付产品，而不是只回答零散问题，也不是只进行代码审查。
+
+# 一、完整项目背景
+
+项目名称：
+
+VisionArm BallTrack
+
+项目定位：
+
+VisionArm BallTrack 是一个基于 RK3588 + 摄像头 + MCU/RTOS 云台的足球视觉追踪与视频/状态回传系统。
+
+一句话产品定义：
+
+在 RK3588 上通过摄像头采集视频，使用预训练足球分割模型识别画面中的足球位置，将足球中心点与画面中心的偏差发送给 MCU/RTOS 云台控制器，驱动云台调整摄像头朝向，使足球尽量保持在画面中心，同时将带有识别标注、状态信息和延迟数据的视频流或状态数据回传到上位机。
+
+这不是一个“模型能够识别足球”的 AI demo，而是一个完整的边缘视觉闭环控制产品。
+
+系统最小闭环：
+
+```text
+Camera
+→ V4L2 mmap 采集
+→ 图像预处理
+→ RKNN Runtime / NPU 推理
+→ 分割 mask 后处理
+→ 足球中心点和置信度
+→ dx/dy 偏差计算
+→ 控制策略
+→ Linux 通过 UART 向 MCU 发送控制量
+→ MCU/RTOS 控制云台
+→ 摄像头朝向发生变化
+→ 视频或状态回传上位机
+→ 输出性能和稳定性测试报告
+```
+
+项目最终需要体现：
+
+1. RK3588 嵌入式 Linux 平台；
+2. Camera/V4L2 streaming I/O；
+3. V4L2 mmap、buffer 申请、入队和出队；
+4. RKNN-Toolkit2 模型转换；
+5. RKNN Runtime C/C++ 板端部署；
+6. Rockchip NPU 推理；
+7. Linux C/C++ 多线程 pipeline；
+8. Linux 与 MCU/RTOS 异构通信；
+9. UART 协议设计；
+10. MCU/RTOS PWM、定时器、任务和队列；
+11. 云台限位、急停和失联保护；
+12. 网络视频或状态回传；
+13. fps、延迟、中心误差和追踪成功率等量化指标；
+14. README、测试报告、用户手册和 release 包。
+
+# 二、项目阶段
+
+项目分为：
+
+* V0：产品定义与边界控制
+* V1：RK3588 基础环境与工具链
+* V2：Camera / V4L2 采集链路
+* V3：足球分割模型迁移与 RKNN 推理
+* V4：足球位置后处理与目标偏差计算
+* V5：Linux → MCU/RTOS 通信协议
+* V6：MCU/RTOS 云台电机控制
+* V7：端到端闭环追踪
+* V8：视频/状态回传上位机
+* V9：测试指标、稳定性与产品化交付
+* V10：简历、README、用户手册和面试包装
+
+我已经完成 V0。
+
+V0 已经确定：
+
+1. 本项目是边缘视觉云台追踪系统，不是 AI demo；
+2. 第一版使用 RK3588 开发板；
+3. 摄像头优先采用 USB UVC 或开发板厂商官方适配摄像头；
+4. 云台优先采用二自由度舵机云台；
+5. 外部 MCU 优先选择 STM32、ESP32 或同类控制器；
+6. Linux 和 MCU 第一版优先使用 UART；
+7. 上位机使用 PC；
+8. 第一版不做复杂 UI、云平台、多目标跟踪、自动变焦、多摄融合和深度估计；
+9. 第一版不做 RK3588 内部 MCU remoteproc/rpmsg；
+10. 第一版不优先做 H.264/RTSP；
+11. 第一版必须完成采集、识别、偏差、控制、回传和测试报告的最小闭环。
+
+现有工程目录大致为：
+
+```text
+VisionArm-BallTrack/
+├── README.md
+├── docs/
+│   ├── v0/
+│   │   ├── product_overview.md
+│   │   ├── system_architecture.md
+│   │   ├── risk_boundary.md
+│   │   └── stage_plan.md
+│   ├── v1_env/
+│   ├── v2_camera_v4l2/
+│   ├── v3_rknn_inference/
+│   ├── v4_postprocess/
+│   ├── v5_linux_mcu_protocol/
+│   ├── v6_mcu_gimbal/
+│   ├── v7_closed_loop/
+│   ├── v8_streaming_viewer/
+│   ├── v9_reports/
+│   └── v10_portfolio/
+├── src/
+│   ├── linux_app/
+│   ├── mcu_firmware/
+│   └── pc_viewer/
+├── models/
+├── tools/
+├── logs/
+│   └── v1_env/
+├── reports/
+└── release/
+```
+
+不要破坏或重写 V0 文档。V1 只允许新增或更新 V1 环境相关内容，以及 README 中的环境搭建章节。
+
+# 三、我现在开始 V1
+
+阶段名称：
+
+V1：RK3588 基础环境与工具链
+
+V1 一句话目标：
+
+确认 RK3588 开发板能够稳定启动和登录，准确记录板卡、Bootloader、Linux 内核、RootFS、CPU 架构、存储、网络和设备节点信息，确认 RKNPU 驱动及 RKNN Runtime 的安装状态，并至少跑通一种 C/C++ 编译部署链路。
+
+V1 要解决的产品问题：
+
+在开发摄像头、NPU 推理和云台控制之前，先建立一个可重复、可追踪、可编译、可部署的 RK3588 基础开发环境，避免后续出现问题时无法判断是硬件、固件、内核、ABI、工具链还是应用代码导致。
+
+# 四、V1 严格边界
+
+V1 不做以下内容：
+
+1. 不写 V4L2 摄像头采集代码；
+2. 不验证摄像头画面；
+3. 不使用 OpenCV VideoCapture；
+4. 不转换 ONNX 模型；
+5. 不生成 RKNN 模型；
+6. 不运行足球分割模型；
+7. 不做 RKNN 推理性能测试；
+8. 不解析分割 mask；
+9. 不计算足球中心点或 dx/dy；
+10. 不设计 Linux → MCU 通信协议；
+11. 不编写 MCU 固件；
+12. 不驱动舵机或云台；
+13. 不做视频回传；
+14. 不做 RTSP、H.264 或复杂 UI；
+15. 不做 remoteproc/rpmsg；
+16. 不为了追求“最新版”而盲目升级内核、驱动、RKNN Runtime 或 rknn_server；
+17. 不在完成只读环境盘点前修改系统文件。
+
+如果我开始讨论摄像头、模型或云台，请提醒我这些属于 V2、V3 或后续阶段。
+
+# 五、V1 技术边界定义
+
+必须区分以下组件：
+
+## 1. RKNN-Toolkit2
+
+主要运行在开发 PC 上，用于模型转换、量化、精度分析和性能评估。
+
+V1 不安装和配置完整模型转换环境，除非只是记录后续使用计划。
+
+## 2. RKNN Runtime
+
+运行在 RK3588 板端，通常通过 `librknnrt.so` 向 C/C++ 应用提供 RKNN API。
+
+V1 只确认：
+
+* Runtime 文件是否存在；
+* Runtime 文件架构是否正确；
+* 动态链接器是否能找到它；
+* Runtime 版本或来源能否确定；
+* 核心 API 符号是否可加载。
+
+V1 不加载实际模型。
+
+## 3. RKNPU 内核驱动
+
+负责 Linux 内核与 RK3588 NPU 硬件之间的交互。
+
+V1 只检查：
+
+* 驱动是否加载或内建；
+* 内核日志是否有 RKNPU/NPU 信息；
+* 是否存在相关设备节点或 sysfs/debugfs 信息；
+* 驱动版本能否读取。
+
+不得只因为 `/dev/rknpu` 不存在就立即下结论。需要结合设备节点、内核日志、模块状态和厂商固件设计综合判断。
+
+## 4. rknn_server
+
+主要用于 PC 与板端进行连板调试或代理执行。
+
+V1 记录：
+
+* 是否安装；
+* 是否运行；
+* 文件架构；
+* 版本或文件哈希；
+* 它与 Runtime 的来源是否一致。
+
+如果当前项目不使用连板调试，rknn_server 不一定必须运行，但必须记录状态。
+
+# 六、待填写的实际硬件信息
+
+以下信息如果我尚未提供，不要自行猜测：
+
+```text
+开发板厂商：[待填写]
+开发板型号：[待填写]
+SoC：[预期 RK3588 或 RK3588S，以实际检测结果为准]
+系统类型：[Debian / Ubuntu / Buildroot / Yocto / 其他，待检测]
+固件版本：[待填写]
+Linux 登录方式：[串口 / SSH / 本地终端]
+开发主机系统：[待填写]
+开发主机架构：[通常 x86_64，但以实际为准]
+交叉工具链来源：[开发板 BSP / 厂商 SDK / 系统包 / 待确定]
+串口设备节点：[待填写]
+串口波特率：[必须查开发板官方资料，不得猜测]
+板端用户名：[待填写]
+板端 IP：[待填写]
+```
+
+如果某项未知，应提供检测方法并标记为 `UNKNOWN` 或 `TBD`，不能编造。
+
+# 七、资料搜索要求
+
+遇到版本、驱动路径、工具链或开发板固件问题时，必须进行网页搜索，并按以下优先级使用资料：
+
+1. 开发板厂商官方 Wiki、官方手册、官方 BSP 或官方 GitHub；
+2. `airockchip/rknn-toolkit2` 官方仓库及其中的 `doc/`、`rknpu2/`；
+3. `airockchip/rknn_model_zoo` 官方仓库；
+4. Linux Kernel 官方文档；
+5. GCC、CMake、systemd 等工具的官方文档；
+6. 高质量社区资料只能作为补充，不能覆盖官方资料。
+
+不要优先参考过时博客。
+
+不要从旧教程中直接复制以下危险操作：
+
+```bash
+cp librknnrt.so /usr/lib/
+cp rknn_server /usr/bin/
+```
+
+除非已经确认：
+
+* 开发板系统架构；
+* 当前 Runtime 和驱动版本；
+* 新文件来源；
+* ABI 兼容性；
+* 文件备份方案；
+* 开发板厂商建议；
+* 回滚方式。
+
+# 八、V1 必须产出的交付物
+
+至少生成或保存：
+
+```text
+README.md
+docs/v1_env/README.md
+docs/v1_env/environment_report.md
+docs/v1_env/toolchain_report.md
+docs/v1_env/rknn_runtime_report.md
+docs/v1_env/v1_acceptance.md
+
+tools/v1_env/collect_board_info.sh
+tools/v1_env/hello_c.c
+tools/v1_env/hello_cpp.cpp
+tools/v1_env/rknn_runtime_probe.c
+
+logs/v1_env/boot_full.log
+logs/v1_env/dmesg.log
+logs/v1_env/uname.txt
+logs/v1_env/os_release.txt
+logs/v1_env/board_identity.txt
+logs/v1_env/cpuinfo.txt
+logs/v1_env/memory_storage.txt
+logs/v1_env/device_nodes.txt
+logs/v1_env/network.txt
+logs/v1_env/tool_versions.txt
+logs/v1_env/rknpu_driver.txt
+logs/v1_env/rknn_runtime.txt
+logs/v1_env/native_build.log
+logs/v1_env/cross_build.log
+logs/v1_env/runtime_probe.log
+
+build/v1_env/
+```
+
+说明：
+
+* 如果无法获得完整串口启动日志，`boot_full.log` 必须明确标记为缺失；
+* 可以暂时使用 `journalctl -b` 和 `dmesg` 作为替代，但不得声称它们等同于完整的 Bootloader + Kernel 启动日志；
+* 不适用的日志文件可以写明 `NOT_APPLICABLE`；
+* 未完成的项目必须写 `TBD` 或 `BLOCKED`，不得伪造结果。
+
+# 九、你第一次回复时必须严格输出以下 13 部分
+
+## 1. V1 一句话目标
+
+说明 V1 到底解决什么工程问题，以及为什么不能直接进入摄像头或模型阶段。
+
+## 2. V1 不做什么
+
+明确列出摄像头、模型、MCU、云台、视频回传、UI、remoteproc/rpmsg 等不属于 V1 的内容。
+
+## 3. V1 最小可交付物
+
+列出：
+
+* 文档；
+* 日志；
+* 脚本；
+* C/C++ 测试程序；
+* 编译产物；
+* Git 提交；
+* 必须记录的版本和文件哈希。
+
+将交付物分为：
+
+* P0 必须完成；
+* P1 推荐完成；
+* P2 可延期。
+
+## 4. 推荐目录结构
+
+给出 V1 阶段需要新增的完整目录树，并说明每个文件用途。
+
+不要重复创建整个项目，只在现有仓库中增加 V1 内容。
+
+## 5. 当前阶段 Markdown 文档模板
+
+直接给出以下文件的可复制模板：
+
+### `docs/v1_env/environment_report.md`
+
+至少包含：
+
+* 开发板身份；
+* SoC；
+* Device Tree model/compatible；
+* Bootloader；
+* Linux kernel；
+* RootFS/发行版；
+* CPU 架构；
+* libc；
+* CPU 和内存；
+* 存储；
+* 网络；
+* 设备节点摘要；
+* 时间和时区；
+* 启动日志状态；
+* 已知异常；
+* 结论。
+
+### `docs/v1_env/toolchain_report.md`
+
+至少包含：
+
+* 本地编译环境；
+* 交叉编译环境；
+* 编译器名称和版本；
+* target triple；
+* sysroot；
+* libc/ABI；
+* CMake；
+* 编译命令；
+* ELF 检查结果；
+* 动态依赖；
+* 部署和运行结果；
+* 本地编译与交叉编译的取舍；
+* 结论。
+
+### `docs/v1_env/rknn_runtime_report.md`
+
+至少包含：
+
+* RKNPU 驱动状态；
+* 驱动版本；
+* 内核日志证据；
+* 相关设备节点；
+* `librknnrt.so` 路径；
+* ELF 架构；
+* 动态链接器可见性；
+* Runtime 版本；
+* Runtime 来源；
+* 文件 SHA-256；
+* rknn_server 路径和状态；
+* `dlopen` 测试；
+* API 符号加载测试；
+* 驱动、Runtime、rknn_server 兼容性判断；
+* 未解决问题；
+* 结论。
+
+### `docs/v1_env/v1_acceptance.md`
+
+至少包含：
+
+* 每项验收条件；
+* 对应证据文件；
+* PASS/WARN/FAIL/BLOCKED 状态；
+* 阻塞 V2 的问题；
+* 最终结论。
+
+还要给出 README 中“开发环境”章节的模板。
+
+## 6. 技术链路图或文字流程
+
+给出 V1 环境验证流程，例如：
+
+```text
+Power On
+→ BootROM / SPL / U-Boot
+→ Linux Kernel
+→ Device Tree
+→ RootFS / init
+→ SSH or Serial Login
+→ Hardware and OS Inventory
+→ Compiler / ABI Inventory
+→ Native Build or Cross Build
+→ ELF Inspection
+→ Deploy to RK3588
+→ Execute
+→ RKNPU Driver Inventory
+→ RKNN Runtime Inventory
+→ dlopen / Symbol Probe
+→ Save Logs
+→ V1 Acceptance
+```
+
+还要画出 RKNN 软件栈关系：
+
+```text
+Development PC
+  RKNN-Toolkit2
+  Cross Compiler
+         |
+         | RKNN model / application binary
+         v
+RK3588 Linux
+  User Application
+         |
+         v
+  librknnrt.so
+         |
+         v
+  RKNPU Kernel Driver
+         |
+         v
+  RK3588 NPU
+```
+
+必须说明 V1 只验证软件栈存在和可加载，不验证模型推理。
+
+## 7. 具体执行步骤
+
+必须按以下顺序组织：
+
+### Step A：只读环境盘点
+
+先收集信息，不安装包、不替换库、不升级内核。
+
+### Step B：启动日志保存
+
+优先串口完整日志；无法获取时使用明确标记的替代日志。
+
+### Step C：板端本地编译测试
+
+检测 `gcc/g++/cmake/make/pkg-config`，编译和运行 C/C++ hello。
+
+### Step D：交叉编译测试
+
+检测开发主机和目标板架构，选择匹配的 aarch64 工具链，编译、检查 ELF、传输并运行。
+
+### Step E：RKNPU 驱动盘点
+
+检查内核日志、模块、设备节点、sysfs/debugfs。
+
+### Step F：RKNN Runtime 盘点
+
+查找 `librknnrt.so` 和 rknn_server，检查 ELF、动态依赖、版本、哈希和进程状态。
+
+### Step G：Runtime 无模型加载测试
+
+编译 `rknn_runtime_probe.c`，使用 `dlopen()` 加载 `librknnrt.so`，并使用 `dlsym()` 检查核心 API 符号，例如：
+
+```text
+rknn_init
+rknn_destroy
+rknn_query
+rknn_run
+```
+
+该程序不加载模型、不执行推理。
+
+### Step H：生成 V1 报告
+
+将命令、原始输出、分析结论分开保存。
+
+### Step I：Git 提交
+
+给出建议的 Git commit。
+
+每一步必须给出：
+
+* 目的；
+* 执行位置：开发主机或 RK3588；
+* 命令；
+* 期望现象；
+* 失败时如何判断；
+* 输出保存到哪个文件。
+
+## 8. 推荐命令、代码和配置示例
+
+给出可直接复制的命令，但所有可能因厂商不同而变化的参数必须使用占位符，不得猜测。
+
+至少覆盖以下内容。
+
+### 8.1 创建目录
+
+```bash
+mkdir -p docs/v1_env
+mkdir -p tools/v1_env
+mkdir -p logs/v1_env
+mkdir -p build/v1_env
+```
+
+### 8.2 基础身份信息
+
+需要合理组织并保存这些命令的结果：
+
+```bash
+date -Ins
+timedatectl 2>/dev/null || true
+
+uname -a
+uname -m
+cat /proc/version
+cat /etc/os-release 2>/dev/null || true
+cat /etc/issue 2>/dev/null || true
+hostnamectl 2>/dev/null || true
+
+tr -d '\0' </proc/device-tree/model 2>/dev/null || true
+tr '\0' '\n' </proc/device-tree/compatible 2>/dev/null || true
+
+lscpu 2>/dev/null || cat /proc/cpuinfo
+cat /proc/cpuinfo
+getconf LONG_BIT 2>/dev/null || true
+getconf GNU_LIBC_VERSION 2>/dev/null || true
+ldd --version 2>&1 | head -n 5
+
+free -h
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL
+df -hT
+mount
+```
+
+### 8.3 设备节点和驱动
+
+```bash
+ls -al /dev
+ls -l /dev/rknpu* 2>/dev/null || true
+ls -l /dev/dri/* 2>/dev/null || true
+ls -l /dev/video* 2>/dev/null || true
+ls -l /dev/ttyS* /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true
+
+lsmod
+lsmod | grep -iE 'rknpu|rockchip|npu' || true
+
+dmesg | grep -iE 'rknpu|npu|rk3588|rockchip' || true
+journalctl -k -b 2>/dev/null | grep -iE 'rknpu|npu|rk3588|rockchip' || true
+```
+
+提醒我：
+
+`/dev/videoX` 在 V1 只记录，不采集、不测试格式。
+
+### 8.4 网络和登录
+
+```bash
+ip -brief address
+ip route
+cat /etc/resolv.conf
+ss -lntup 2>/dev/null || true
+ping -c 4 <GATEWAY_OR_PC_IP>
+```
+
+### 8.5 编译工具
+
+```bash
+command -v gcc || true
+command -v g++ || true
+command -v cc || true
+command -v c++ || true
+command -v make || true
+command -v cmake || true
+command -v pkg-config || true
+
+gcc --version 2>/dev/null || true
+g++ --version 2>/dev/null || true
+cmake --version 2>/dev/null || true
+make --version 2>/dev/null | head -n 2 || true
+pkg-config --version 2>/dev/null || true
+
+gcc -dumpmachine 2>/dev/null || true
+gcc -print-sysroot 2>/dev/null || true
+```
+
+### 8.6 编译后的 ELF 检查
+
+```bash
+file <binary>
+readelf -h <binary>
+readelf -l <binary>
+readelf -d <binary> 2>/dev/null || true
+ldd <binary> 2>/dev/null || true
+sha256sum <binary>
+```
+
+### 8.7 Runtime 查找
+
+必须给出范围合理、不会无限扫描伪文件系统的命令，例如：
+
+```bash
+ldconfig -p 2>/dev/null | grep -i rknn || true
+
+find /usr /lib /lib64 /opt \
+  -xdev \
+  \( -name 'librknnrt.so*' -o -name 'rknn_server' -o -name 'rknn_api.h' \) \
+  -print 2>/dev/null
+```
+
+对找到的文件执行：
+
+```bash
+file <PATH>
+readelf -h <PATH>
+readelf -d <PATH> 2>/dev/null || true
+sha256sum <PATH>
+strings <PATH> | grep -iE 'version|rknn|runtime' | head -n 50
+```
+
+不能把 `strings` 的任意字符串直接认定为正式版本号。必须说明证据强度。
+
+### 8.8 rknn_server 状态
+
+```bash
+ps -ef | grep '[r]knn_server' || true
+pgrep -a rknn_server || true
+systemctl status rknn_server 2>/dev/null || true
+```
+
+不要默认执行 `restart_rknn.sh`。
+
+### 8.9 完整启动日志
+
+串口命令必须使用占位符：
+
+```bash
+picocom -b <VENDOR_DOCUMENTED_BAUD_RATE> <HOST_SERIAL_DEVICE> \
+  | tee logs/v1_env/boot_full.log
+```
+
+或者提供 `minicom`、`screen` 的等价方式。
+
+必须明确：
+
+* 串口设备是开发主机设备节点；
+* 波特率必须来自板卡官方资料；
+* 日志应从上电前开始采集；
+* 应覆盖 BootROM/SPL、U-Boot、Kernel 和 init；
+* 若缺少 Bootloader 部分，不得称为完整启动日志。
+
+### 8.10 C Hello 和 C++ Hello
+
+直接提供完整、可编译的：
+
+* `tools/v1_env/hello_c.c`
+* `tools/v1_env/hello_cpp.cpp`
+
+程序至少输出：
+
+* 程序名称；
+* 编译日期；
+* 指针位数；
+* 编译器信息；
+* 当前运行平台通过 `uname()` 得到的结果。
+
+编译参数至少使用：
+
+```bash
+-Wall -Wextra -Wpedantic
+```
+
+不要为了通过编译随意去掉警告。
+
+### 8.11 Runtime Probe
+
+直接提供完整的 `tools/v1_env/rknn_runtime_probe.c`。
+
+要求：
+
+1. 使用 `<dlfcn.h>`；
+2. 默认尝试加载 `librknnrt.so`；
+3. 允许通过命令行传入 Runtime 路径；
+4. 对 `dlopen()` 失败打印明确错误；
+5. 使用 `dlsym()` 检查核心符号；
+6. 每个符号打印 FOUND 或 MISSING；
+7. 返回值能区分成功和失败；
+8. 不加载任何 RKNN 模型；
+9. 不调用 `rknn_init()`；
+10. 编译时链接 `-ldl`。
+
+需要给出：
+
+```bash
+gcc -Wall -Wextra -Wpedantic \
+  tools/v1_env/rknn_runtime_probe.c \
+  -o build/v1_env/rknn_runtime_probe \
+  -ldl
+```
+
+以及运行和保存日志的命令。
+
+### 8.12 信息收集脚本
+
+直接提供完整的：
+
+```text
+tools/v1_env/collect_board_info.sh
+```
+
+脚本要求：
+
+1. 使用 `#!/usr/bin/env bash`；
+2. 使用合理的错误处理；
+3. 不修改系统；
+4. 不安装软件；
+5. 不执行重启；
+6. 不复制或替换库；
+7. 每个命令都有标题；
+8. 同时输出到终端和日志目录；
+9. 单个命令失败时继续收集；
+10. 记录命令执行时间；
+11. 避免扫描 `/proc`、`/sys`、`/dev` 下的大量伪文件；
+12. 支持普通用户运行；
+13. 对需要 root 权限的日志给出提示；
+14. 将结果写入 `logs/v1_env/`。
+
+## 9. 最小验证实验
+
+必须定义 V1 最小验证实验。
+
+最低验收动作应包括：
+
+### 实验一：系统身份验证
+
+能够登录 RK3588，并保存：
+
+* `uname -a`；
+* `/etc/os-release`；
+* Device Tree model/compatible；
+* CPU 架构；
+* 内存和存储；
+* `/dev` 摘要；
+* 内核日志。
+
+### 实验二：C/C++ 编译运行
+
+至少一种方式成功：
+
+* RK3588 板端本地编译并运行；
+* PC 交叉编译，复制到 RK3588 后运行。
+
+推荐两种方式都验证。
+
+### 实验三：ELF 和 ABI 验证
+
+必须证明：
+
+* 目标架构与 RK3588 系统匹配；
+* ELF 位数正确；
+* 动态加载器存在；
+* 动态依赖能够解析；
+* 程序实际在板端运行成功。
+
+### 实验四：RKNPU/RKNN 软件栈盘点
+
+必须记录：
+
+* RKNPU 驱动证据；
+* Runtime 文件；
+* Runtime 架构；
+* Runtime 版本或 `UNKNOWN`；
+* 文件哈希；
+* rknn_server 状态。
+
+### 实验五：Runtime 无模型探针
+
+`rknn_runtime_probe` 能够成功加载 Runtime，并找到核心 API 符号。
+
+如果 Runtime 不存在或无法加载，V1 状态为 `BLOCKED`，不能伪装成完成。
+
+明确说明：
+
+V1 的最小验证不是“模型跑通”，模型推理属于 V3。
+
+## 10. 常见坑和排查顺序
+
+至少覆盖以下问题：
+
+1. 开发板型号和 SoC 型号混淆；
+2. RK3588 与 RK3588S 混淆；
+3. 64 位内核配 32 位 RootFS；
+4. 交叉编译器 target triple 不匹配；
+5. glibc、musl、uClibc ABI 不匹配；
+6. 程序出现 `Exec format error`；
+7. 程序提示 `No such file or directory`，但文件实际存在；
+8. 动态加载器路径不匹配；
+9. 缺少共享库；
+10. `LD_LIBRARY_PATH` 临时生效但系统仍未正确安装；
+11. `librknnrt.so` 架构不匹配；
+12. Runtime、驱动和 rknn_server 版本不一致；
+13. 使用旧版 rknpu2 教程；
+14. 盲目把库复制到 `/usr/lib`；
+15. 只看文件名，不检查 `file/readelf/sha256sum`；
+16. `/dev/rknpu` 不存在就错误认定 NPU 不可用；
+17. NPU 驱动为 built-in，导致 `lsmod` 看不到；
+18. `dmesg` 权限不足；
+19. 完整 Boot log 与当前内核日志混淆；
+20. 板端时间错误，导致日志时间戳失真；
+21. 网络可连接但 DNS 不可用；
+22. 根文件系统只读；
+23. 存储空间不足；
+24. 编译工具存在但 sysroot 不正确；
+25. 使用 `sudo` 后生成 root 所有者文件。
+
+要求给出严格排查顺序：
+
+```text
+板卡身份
+→ 系统架构
+→ 内核和 RootFS
+→ libc/ABI
+→ 编译器 target
+→ ELF header
+→ ELF interpreter
+→ 动态依赖
+→ 文件权限
+→ 部署路径
+→ Runtime 文件
+→ Runtime 架构
+→ RKNPU 驱动
+→ Runtime/驱动版本关系
+```
+
+不要一遇到问题就建议重刷系统。
+
+## 11. 阶段完成前自查清单
+
+给出可复制的 Markdown checklist，至少包含：
+
+### 启动与登录
+
+* 开发板可稳定上电；
+* 串口或 SSH 可登录；
+* 启动日志已保存；
+* 板卡型号和 SoC 已确认。
+
+### 系统信息
+
+* Kernel 已记录；
+* RootFS/发行版已记录；
+* CPU 架构已记录；
+* libc 已记录；
+* 内存和存储已记录；
+* 网络已记录；
+* 设备节点已记录。
+
+### 编译环境
+
+* gcc/g++ 状态已记录；
+* C 程序已编译运行；
+* C++ 程序已编译运行；
+* 本地或交叉编译链路至少一条跑通；
+* ELF 和 ABI 已检查；
+* 编译日志已保存。
+
+### NPU 软件栈
+
+* RKNPU 驱动状态已记录；
+* 内核日志证据已保存；
+* Runtime 路径已确认；
+* Runtime ELF 架构已确认；
+* Runtime 版本或 UNKNOWN 已记录；
+* Runtime SHA-256 已保存；
+* rknn_server 状态已记录；
+* `dlopen` 探针已执行；
+* 核心 API 符号已检查。
+
+### 文档和版本控制
+
+* V1 文档已完成；
+* README 环境章节已更新；
+* 原始日志未被人工修改；
+* 敏感信息已脱敏；
+* Git 已提交；
+* V1 验收结果为 PASS 或有明确 BLOCKED 项。
+
+## 12. 延期时的降级方案
+
+必须明确以下优先级。
+
+### P0 不允许砍
+
+1. 稳定启动和登录；
+2. `uname -a`；
+3. `/etc/os-release`；
+4. Device Tree model/compatible；
+5. CPU 架构；
+6. 内存和存储；
+7. `/dev` 设备摘要；
+8. 内核日志；
+9. C 或 C++ hello 至少一个运行成功；
+10. 编译器和 ELF 架构证据；
+11. RKNPU 驱动状态；
+12. RKNN Runtime 路径、架构、版本或 UNKNOWN；
+13. Runtime 文件哈希；
+14. V1 环境报告；
+15. Git 提交。
+
+### P1 可以降级
+
+1. 本地编译和交叉编译只完成一条；
+2. 暂时没有完整串口启动日志，但必须保留 `dmesg` 和 `journalctl -b`；
+3. 暂时不运行 rknn_server；
+4. Runtime 正式版本号无法确认时，记录来源、文件架构和哈希；
+5. CMake 工程可以延后，只保留 gcc/g++ 编译。
+
+### P2 可以延期
+
+1. 自动化 CI；
+2. Docker 交叉编译环境；
+3. SDK 全量编译；
+4. 内核源码编译；
+5. U-Boot 编译；
+6. RootFS 定制；
+7. 性能 governor 调优；
+8. NPU 模型测试；
+9. 摄像头测试；
+10. MCU 和云台测试。
+
+必须说明：
+
+不能通过删掉日志、版本和 ABI 证据来假装 V1 完成。
+
+## 13. 面试可讲点和 V1 → V2 准入条件
+
+### 面试可讲点
+
+说明 V1 完成后可讲：
+
+1. 如何识别 RK3588 板卡、内核、RootFS 和 Device Tree；
+2. 如何区分内核架构、用户空间架构和应用 ELF 架构；
+3. 本地编译与交叉编译的区别；
+4. target triple、sysroot、libc 和动态加载器；
+5. 如何排查 `Exec format error`；
+6. 如何排查共享库加载失败；
+7. RKNN-Toolkit2、RKNN Runtime、rknn_server 和 RKNPU 驱动的职责；
+8. 如何在不加载模型的情况下验证 Runtime 可加载；
+9. 为什么不能盲目替换 `librknnrt.so`；
+10. 如何建立可复现的 BSP/应用开发环境清单；
+11. 为什么保留原始日志、版本信息和 SHA-256；
+12. 如何通过阶段门禁降低系统集成风险。
+
+### V1 → V2 准入条件
+
+只有全部满足以下条件，才允许进入 V2：
+
+* [ ] RK3588 开发板能够稳定启动；
+* [ ] 串口、SSH 或本地终端至少一种登录方式稳定；
+* [ ] 开发板厂商和型号已记录；
+* [ ] SoC 已通过系统证据确认；
+* [ ] `uname -a` 已保存；
+* [ ] Linux 内核版本已记录；
+* [ ] RootFS/发行版已记录；
+* [ ] Device Tree model/compatible 已记录；
+* [ ] CPU 架构和用户空间位数已确认；
+* [ ] libc 类型和版本已记录；
+* [ ] 内存、存储和网络信息已记录；
+* [ ] `/dev` 设备节点摘要已保存；
+* [ ] 启动日志或明确标记的替代日志已保存；
+* [ ] 本地编译或交叉编译至少一条链路跑通；
+* [ ] C 或 C++ hello 已在 RK3588 上运行；
+* [ ] ELF 架构和动态依赖已验证；
+* [ ] RKNPU 驱动状态已确认；
+* [ ] RKNN Runtime 文件位置和架构已确认；
+* [ ] Runtime 版本已确认，或已以 UNKNOWN + 来源 + SHA-256 方式记录；
+* [ ] Runtime `dlopen` 测试已完成；
+* [ ] 核心 RKNN API 符号已检查；
+* [ ] 所有原始日志已保存到 `logs/v1_env/`；
+* [ ] V1 文档已完成；
+* [ ] README 环境章节已更新；
+* [ ] Git 已提交；
+* [ ] 没有通过运行模型来替代环境验证；
+* [ ] 已明确 V2 只验证 Camera/V4L2 采集，不进行足球识别。
+
+如果存在以下情况，V1 必须标记为 BLOCKED，不能直接宣布完成：
+
+1. 无法稳定启动或登录；
+2. 板卡或系统架构不明确；
+3. 编译程序无法在板端运行；
+4. ELF/ABI 不匹配；
+5. RKNPU 驱动完全无证据；
+6. RKNN Runtime 缺失；
+7. Runtime 架构错误；
+8. Runtime 无法被动态加载；
+9. 环境信息和日志没有保存；
+10. 使用未经验证的第三方库覆盖了原系统文件。
+
+# 十、协作方式
+
+在后续对话中遵守以下规则：
+
+1. 先让我运行只读检测命令，再提出安装或修改方案；
+2. 每次只给一组有明确目的的命令；
+3. 我贴出命令输出后，逐项分析；
+4. 对每项结果标记 `PASS`、`WARN`、`FAIL` 或 `BLOCKED`；
+5. 明确指出分析依据来自哪一行输出；
+6. 不得根据文件名或经验猜测版本；
+7. 不确定时标记 UNKNOWN；
+8. 修改系统前必须说明风险、备份和回滚；
+9. 不要要求我提前运行模型；
+10. 不要把 V1 做成 RKNN 推理阶段；
+11. 不要把 V1 做成摄像头采集阶段；
+12. 不要一次性建议升级整个系统；
+13. 优先匹配板卡厂商 BSP、驱动和 Runtime；
+14. 所有命令都要说明在开发主机还是 RK3588 上执行；
+15. 命令输出要使用 `tee` 保存到对应日志；
+16. 所有文档内容必须基于真实命令输出；
+17. 我没有提供的数据必须保留 TBD/UNKNOWN；
+18. 发现阻塞项时给出最小修复方案和验证命令；
+19. 不允许跳过阶段验收；
+20. V1 完成后，必须给出最终 V1 验收报告和建议 Git commit。
+
+现在开始帮助我完成 V1。
+
+请先严格按照前述 13 部分输出完整的 V1 实施方案、目录、Markdown 模板、脚本、C/C++ 示例、Runtime Probe、验证实验、排查顺序和验收条件。
+
+第一轮不要假设我的开发板型号、系统发行版、串口波特率、用户名、IP、Runtime 路径或工具链路径。所有未知值使用占位符，并告诉我如何获取真实值。
+
+最后必须明确说明：
+
+只有在启动、系统身份、编译链、ELF/ABI、RKNPU 驱动、RKNN Runtime、日志、文档和 Git 提交全部达到 V1 准入标准后，才允许进入 V2 Camera/V4L2 采集阶段。

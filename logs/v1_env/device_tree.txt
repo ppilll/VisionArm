@@ -1,0 +1,81 @@
+
+================================================================================
+Device Tree evidence
+================================================================================
+
+--- model ---
+PATH: /proc/device-tree/model
+ATK-DLRK3588 Board
+
+--- compatible ---
+PATH: /proc/device-tree/compatible
+rockchip,rk3588-evb7-lp4-v10
+rockchip,rk3588
+
+--- chosen/bootargs ---
+PATH: /proc/device-tree/chosen/bootargs
+storagemedia=emmc androidboot.storagemedia=emmc androidboot.mode=normal  androidboot.verifiedbootstate=orange rw rootwait earlycon=uart8250,mmio32,0xfeb50000 console=ttyFIQ0 irqchip.gicv3_pseudo_nmi=0 root=PARTUUID=614e0000-0000
+
+--- serial-number ---
+PATH: /proc/device-tree/serial-number
+770657b44c23be5a
+
+--- Device Tree top-level entries (maximum 240) ---
+
+
+
+
+	ACT1 [-a] ACT2	If ACT1 fails, stop, else do ACT2
+	ACT1 -o ACT2	If ACT1 succeeds, stop, else do ACT2
+	! ACT		Invert ACT's success/failure
+Actions:
+	( ACTIONS )	Group actions for -o / -a
+			actions to command line arguments only
+	-amin MINS	atime +N/-N/N minutes in the past
+	-atime DAYS	atime +N/-N/N days in the past
+BusyBox v1.36.0 (2025-01-16 10:31:11 CST) multi-call binary.
+	-cmin MINS	ctime +N/-N/N minutes in the past
+	-ctime DAYS	ctime +N/-N/N days in the past
+Defaults: PATH is current directory, action is '-print'
+	-depth		Act on directory *after* traversing it
+	-empty		Match empty file/directory
+	-exec CMD ARG ;	Run CMD with all instances of {} replaced by
+	-exec CMD ARG + Run CMD with {} replaced by list of file names
+	-executable	File is executable
+			file name. Fails if CMD exits with nonzero
+find: unrecognized: -printf
+First failed action stops processing of current file.
+	-group NAME/ID	File is owned by given group
+	-H		...on command line only
+If none of the following actions is specified, -print is assumed
+	-iname PATTERN	Case insensitive -name
+	-ipath PATTERN	Case insensitive -path
+	-L,-follow	Follow symlinks
+	-maxdepth N	Descend at most N levels. -maxdepth 0 applies
+	-mindepth N	Don't act on first N levels
+	-mmin MINS	mtime is greater than (+N), less than (-N),
+	-mtime DAYS	mtime is greater than (+N), less than (-N),
+	-name PATTERN	Match file name (w/o directory name) to PATTERN
+	-newer FILE	mtime is more recent than FILE's
+			+/-N: file size is bigger/smaller than N
+			Note: -a has higher priority than -o
+			or exactly MASK bits are set in file's mode
+			or exactly N days in the past
+			or exactly N minutes in the past
+	-path PATTERN	Match path to PATTERN
+	-perm MASK	At least one mask bit (+MASK), all bits (-MASK),
+	-print0		Print file name, NUL terminated
+	-print		Print file name
+	-prune		If current file is directory, don't descend into it
+	-quit		Exit
+	-regex PATTERN	Match path to regex PATTERN
+	-samefile FILE	File is same as FILE
+Search for files and perform actions on them.
+	-size N[bck]	File size is N (c:bytes,k:kbytes,b:512 bytes(def.))
+	-type X		File type is X (one of: f,d,l,b,c,s,p)
+Usage: find [-HL] [PATH]... [OPTIONS] [ACTIONS]
+	-user NAME/ID	File is owned by given user
+	-xdev		Don't descend directories on other filesystems
+
+--- Relevant Device Tree node names (bounded depth and result count) ---
+INFO: no matching Device Tree node names found, or access was restricted

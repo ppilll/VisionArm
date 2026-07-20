@@ -1,0 +1,95 @@
+
+================================================================================
+RKNPU kernel-driver inventory
+================================================================================
+NOTE: no module is loaded, unloaded, or modified by this collector.
+
+--- Loaded modules filtered for RKNPU/NPU ---
+$ bash -c lsmod\ 2\>\&1\ \|\ grep\ -Eai\ \'\(\^\|\[\[:space:\]\]\)\(rknpu\|npu\)\(\[\[:space:\]\]\|\$\)\'\ \|\|\ true
+[EXIT] 0
+
+--- Matching /sys/module entries ---
+
+--- modinfo rknpu (metadata only) ---
+$ modinfo rknpu
+modinfo: ERROR: Module alias rknpu not found.
+[EXIT] 1 (continued; no system changes were attempted)
+
+--- Kernel configuration evidence for RKNPU/NPU ---
+# CONFIG_RFKILL_INPUT is not set
+CONFIG_INPUT=y
+CONFIG_INPUT_LEDS=y
+CONFIG_INPUT_FF_MEMLESS=y
+# CONFIG_INPUT_POLLDEV is not set
+# CONFIG_INPUT_SPARSEKMAP is not set
+# CONFIG_INPUT_MATRIXKMAP is not set
+# CONFIG_INPUT_MOUSEDEV is not set
+# CONFIG_INPUT_JOYDEV is not set
+CONFIG_INPUT_EVDEV=y
+# CONFIG_INPUT_EVBUG is not set
+CONFIG_INPUT_KEYBOARD=y
+CONFIG_INPUT_MOUSE=y
+# CONFIG_INPUT_JOYSTICK is not set
+# CONFIG_INPUT_TABLET is not set
+CONFIG_INPUT_TOUCHSCREEN=y
+CONFIG_INPUT_MISC=y
+# CONFIG_INPUT_AD714X is not set
+# CONFIG_INPUT_ATMEL_CAPTOUCH is not set
+# CONFIG_INPUT_BMA150 is not set
+# CONFIG_INPUT_E3X0_BUTTON is not set
+# CONFIG_INPUT_MMA8450 is not set
+# CONFIG_INPUT_GPIO_BEEPER is not set
+# CONFIG_INPUT_GPIO_DECODER is not set
+# CONFIG_INPUT_GPIO_VIBRA is not set
+# CONFIG_INPUT_ATI_REMOTE2 is not set
+# CONFIG_INPUT_KEYSPAN_REMOTE is not set
+# CONFIG_INPUT_KXTJ9 is not set
+# CONFIG_INPUT_POWERMATE is not set
+# CONFIG_INPUT_YEALINK is not set
+# CONFIG_INPUT_CM109 is not set
+# CONFIG_INPUT_REGULATOR_HAPTIC is not set
+CONFIG_INPUT_UINPUT=y
+# CONFIG_INPUT_PCF8574 is not set
+# CONFIG_INPUT_PWM_BEEPER is not set
+# CONFIG_INPUT_PWM_VIBRA is not set
+CONFIG_INPUT_RK805_PWRKEY=y
+# CONFIG_INPUT_GPIO_ROTARY_ENCODER is not set
+# CONFIG_INPUT_ADXL34X is not set
+# CONFIG_INPUT_IMS_PCU is not set
+# CONFIG_INPUT_IQS269A is not set
+# CONFIG_INPUT_CMA3000 is not set
+# CONFIG_INPUT_DRV260X_HAPTICS is not set
+# CONFIG_INPUT_DRV2665_HAPTICS is not set
+# CONFIG_INPUT_DRV2667_HAPTICS is not set
+# CONFIG_USB_VIDEO_CLASS_INPUT_EVDEV is not set
+CONFIG_SND_JACK_INPUT_DEV=y
+# CONFIG_VIRTIO_INPUT is not set
+CONFIG_ROCKCHIP_RKNPU=y
+CONFIG_ROCKCHIP_RKNPU_DEBUG_FS=y
+# CONFIG_ROCKCHIP_RKNPU_PROC_FS is not set
+# CONFIG_ROCKCHIP_RKNPU_FENCE is not set
+# CONFIG_ROCKCHIP_RKNPU_SRAM is not set
+CONFIG_ROCKCHIP_RKNPU_DRM_GEM=y
+
+--- Matching platform-driver entries ---
+
+--- NPU/RKNPU kernel log lines (maximum 400) ---
+[    5.241045] RKNPU fdab0000.npu: Adding to iommu group 0
+[    5.241285] RKNPU fdab0000.npu: RKNPU: rknpu iommu is enabled, using iommu mode
+[    5.242836] RKNPU fdab0000.npu: can't request region for resource [mem 0xfdab0000-0xfdabffff]
+[    5.242872] RKNPU fdab0000.npu: can't request region for resource [mem 0xfdac0000-0xfdacffff]
+[    5.242896] RKNPU fdab0000.npu: can't request region for resource [mem 0xfdad0000-0xfdadffff]
+[    5.243644] [drm] Initialized rknpu 0.9.2 20231018 for fdab0000.npu on minor 1
+[    5.248414] RKNPU fdab0000.npu: RKNPU: bin=0
+[    5.248643] RKNPU fdab0000.npu: leakage=10
+[    5.248786] debugfs: Directory 'fdab0000.npu-rknpu' with parent 'vdd_npu_s0' already present!
+[    5.257835] RKNPU fdab0000.npu: pvtm=903
+[    5.264200] RKNPU fdab0000.npu: pvtm-volt-sel=4
+[    5.266868] RKNPU fdab0000.npu: avs=0
+[    5.267341] RKNPU fdab0000.npu: l=10000 h=85000 hyst=5000 l_limit=0 h_limit=800000000 h_table=0
+[    5.278575] RKNPU fdab0000.npu: failed to find power_model node
+[    5.278667] RKNPU fdab0000.npu: RKNPU: failed to initialize power model
+[    5.278692] RKNPU fdab0000.npu: RKNPU: failed to get dynamic-coefficient
+
+--- NPU candidate device nodes ---
+crw-rw---- 1 root video 241, 0 Jan  1 08:00 /dev/mpp_service

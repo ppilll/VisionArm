@@ -1,0 +1,21 @@
+
+================================================================================
+Session metadata
+================================================================================
+project=VisionArm BallTrack
+stage=V1 RK3588 environment baseline
+collector_version=1.0
+start_time=1970-01-01T08:13:34+08:00
+execution_user=root
+uid_gid=uid=0(root) gid=0(root) groups=0(root)
+hostname=ATK-DLRK3588
+pwd=/mnt/nfs/VisionARM/v1
+script_path=./collect_board_info.sh
+script_dir=/mnt/nfs/VisionARM/v1
+repo_root=/mnt/nfs
+log_dir=/mnt/nfs/visionarm_logs/v1_env
+sudo_used=NO
+system_modification=NO (repository log files only)
+end_time=1970-01-01T08:13:35+08:00
+session_log=/mnt/nfs/visionarm_logs/v1_env/collect_board_info_19700101_081334.log
+manifest_note=active collect_board_info_*.log is excluded from manifest because it remains open until exit
