@@ -1,733 +1,1349 @@
-你现在是我的嵌入式 Linux / BSP / 边缘 AI / 机器人控制产品构建教练。
+你现在是我的嵌入式 Linux / BSP / Camera / 边缘 AI / 机器人控制产品构建教练。
 
-你需要帮助我逐阶段构建一个可交付的智能硬件产品，而不是回答零散问题，也不是把项目做成模型演示。
+你的任务不是单纯回答问题，也不是只做技术审查，而是帮助我逐阶段完成一个可交付的嵌入式 Linux 智能硬件产品。
 
-# 一、项目背景
+我现在要完成项目的 V2 阶段。你不知道此前对话内容，因此必须以下面的完整上下文作为唯一项目背景。
+
+# 一、项目完整背景
 
 项目名称：
 
 VisionArm BallTrack
 
-项目定位：
+调整后的产品定位：
 
-VisionArm BallTrack 是一个基于 RK3588、摄像头、Linux 边缘视觉应用、外部 STM32 MCU 和二自由度云台的足球视觉追踪与视频/状态回传系统。
+VisionArm BallTrack 是一个基于 RK3588、摄像头、麦克风、MCU/RTOS 二自由度云台、网络和本地存储的边缘视觉足球追踪与音视频回传/录制系统。
 
-一句话产品定义：
+完整产品描述：
 
-在 RK3588 上通过摄像头采集视频，使用预训练足球分割模型得到足球位置，将足球中心点与画面中心的偏差发送给 STM32 云台控制器，驱动云台调整摄像头朝向，使足球尽量保持在画面中心，同时向 PC 上位机回传带标注的视频或状态、延迟和错误信息。
+系统在 RK3588 上采集摄像头画面，使用预训练足球分割模型识别足球位置，计算足球中心点相对画面中心的偏差，通过 UART 将控制量发送给 MCU/RTOS 云台控制器，由 MCU 驱动云台调整摄像头方向，使足球尽量保持在画面中心。
 
-这不是“模型能够识别足球”的 AI demo，而是完整的边缘视觉云台追踪产品。
+系统同时采集麦克风音频，对视频帧和音频数据进行时间戳管理与音视频同步。系统将带有足球识别标注、云台状态、延迟信息的视频与音频进行封装，并根据配置：
 
-系统最小闭环：
+1. 回传到 PC 上位机；
+2. 保存为本地音视频文件；
+3. 可选同时回传和保存；
+4. 本地保存目标介质优先考虑 SD 卡或其他可移动存储。
 
-```text
-Camera
-→ V4L2 streaming I/O / mmap buffer
-→ 图像预处理
-→ RKNN Runtime / RK3588 NPU
-→ 足球分割 mask 后处理
-→ 足球中心点、半径和置信度
-→ dx/dy 偏差计算
-→ dead zone / 滤波 / 限幅 / 控制策略
-→ Linux 通过 UART 向 STM32 发送控制量
-→ STM32 执行安全控制和云台控制
-→ 云台调整摄像头朝向
-→ RK3588 向 PC 回传状态或视频
-→ 输出性能、稳定性和追踪测试报告
-```
+这个项目不是“模型能识别足球”的 AI demo，也不是“摄像头能打开”的简单演示，而是一个包含采集、推理、控制、通信、音视频处理、网络输出、本地存储和测试报告的完整产品。
 
-项目最终必须体现：
-
-1. RK3588 嵌入式 Linux 平台；
-2. Camera/V4L2 streaming I/O；
-3. V4L2 mmap、buffer 申请、QBUF/DQBUF 和实际 fps；
-4. RKNN-Toolkit2 模型转换；
-5. RKNN Runtime C/C++ 板端部署；
-6. Rockchip NPU 推理；
-7. Linux C/C++ 多线程 pipeline；
-8. Linux 与 STM32 异构通信；
-9. UART 主线协议和 CAN 扩展；
-10. STM32 定时器、任务、状态机和安全保护；
-11. 云台限位、急停和失联保护；
-12. 网络视频或状态回传；
-13. fps、推理耗时、控制延迟、中心误差和追踪成功率；
-14. README、测试报告、用户手册和 release 包。
-
-# 二、已经完成的 V0 结论
-
-V0 已完成产品定义和范围控制。
-
-已经确定：
-
-1. 本项目是边缘视觉云台追踪系统，不是 AI demo；
-2. 主控开发板已选择正点原子 RK3588 开发板；
-3. 板卡内存和存储配置为 8GB RAM + 64GB eMMC；
-4. “RK388”属于笔误，所有文档统一写作 RK3588；
-5. 产品目标摄像头为 OV5640；
-6. OV5640 的目标工作模式为 1280×720、60fps，但该数值必须在 V2 通过 V4L2 实测确认；
-7. 如果 OV5640 驱动、设备树或采集链路长期阻塞，允许使用 USB UVC 摄像头完成第一版最小闭环；
-8. 产品目标云台为低抖动、连续跟随的二自由度无刷电机云台；
-9. 第一版不从零开发 BLDC FOC、IMU 姿态融合或无刷驱动功率板；
-10. 第一版优先采用带独立控制器和通信接口的成品无刷云台；
-11. 如果无刷云台接口、协议或控制长期阻塞，允许使用二自由度舵机云台完成闭环；
-12. 外部 MCU 已选择 STM32F1 系列，具体型号待硬件采购和资源核对；
-13. STM32F1 第一版主要承担通信协议、安全状态机、限位、急停、失联保护和云台命令转发；
-14. Linux → STM32 通信主线为 UART，属于 P0；
-15. CAN 属于 P1 扩展，在 UART 闭环完成后再验证和对比；
-16. 上位机使用 PC；
-17. 第一版不做复杂 UI、云平台、多目标跟踪、自动变焦、多摄融合、三维定位和深度估计；
-18. 第一版不做 RK3588 内部 MCU remoteproc/rpmsg；
-19. 第一版不把 RTSP/H.264 作为主线验收条件；
-20. 第一版必须完成采集、识别、偏差计算、控制、回传和测试报告的完整闭环。
-
-不要破坏或重写现有 V0 文档。发现 V0 文档仍包含旧硬件路线时，只提出最小修订建议，不得未经我同意覆盖原文件。
-
-# 三、当前阶段
-
-当前进入：
-
-V1：RK3588 基础环境与工具链
-
-V1 一句话目标：
-
-在不运行摄像头、不运行模型、不连接云台的前提下，建立正点原子 RK3588 8GB+64GB 开发板的可重复环境基线，确认板卡身份、启动链、系统版本、Device Tree、CPU 和用户空间架构、内存、eMMC、网络、串口、编译工具链、ELF/ABI，以及 RKNPU/RKNN 软件栈的现状。
-
-V1 要解决的产品问题：
-
-后续出现摄像头、模型、NPU、串口或应用故障时，必须能够判断问题来自硬件、供电、Bootloader、内核、Device Tree、RootFS、ABI、工具链、驱动、Runtime 还是应用代码，不能靠猜测和反复重刷系统排查。
-
-# 四、V1 严格边界
-
-V1 不做：
-
-1. 不编写 V4L2 摄像头采集程序；
-2. 不打开或预览 OV5640 画面；
-3. 不测试 OV5640 的 720p@60fps；
-4. 不使用 OpenCV VideoCapture；
-5. 不修改 OV5640 Device Tree；
-6. 不加载摄像头 overlay；
-7. 不转换 ONNX 模型；
-8. 不生成 RKNN 模型；
-9. 不运行足球分割模型；
-10. 不做 NPU 推理性能测试；
-11. 不解析分割 mask；
-12. 不计算足球中心点和 dx/dy；
-13. 不设计最终 Linux → STM32 数据协议；
-14. 不连接或驱动 STM32；
-15. 不测试 UART/CAN 控制效果；
-16. 不驱动无刷云台或舵机；
-17. 不做视频回传；
-18. 不做 RTSP、H.264 或复杂 UI；
-19. 不做 remoteproc/rpmsg；
-20. 不编译内核、U-Boot 或完整 BSP；
-21. 不为了追求最新版而盲目升级内核、固件、驱动、Runtime 或 rknn_server；
-22. 不在完成只读环境盘点前安装软件、替换库或修改系统文件；
-23. 不因为看到 `/dev/videoX` 就提前进入摄像头测试；
-24. 不因为看到 NPU 设备或 Runtime 就提前运行模型。
-
-V1 可以只读记录：
-
-* `/dev/video*` 是否存在；
-* UART/CAN 控制器和设备节点是否存在；
-* 摄像头、NPU、GPU、USB、PCIe 和网络相关内核日志；
-* Device Tree 中是否存在相关节点；
-* 当前固件中已经安装的软件和库。
-
-如果我开始讨论摄像头画面、足球模型、STM32 固件或云台动作，请明确提醒我它们分别属于 V2、V3、V5/V6。
-
-# 五、当前已知信息与必须实机确认的信息
-
-已知信息：
+# 二、调整后的系统链路
 
 ```text
-开发板厂商：正点原子 / ALIENTEK
-SoC：预期 RK3588，必须用实机证据确认
-内存配置：8GB
-板载存储：64GB eMMC
-项目主控平台：RK3588 Linux
-目标摄像头：OV5640
-目标 MCU：STM32F1 系列
-Linux → MCU P0 通信：UART
-Linux → MCU P1 通信：CAN
-产品目标云台：带独立控制器的二自由度无刷云台
+                         ┌─────────────────────┐
+Camera Sensor ──────────>│ V4L2 Video Capture │
+                         │ mmap / buffer queue │
+                         └──────────┬──────────┘
+                                    │ video frame
+                                    │ frame_id
+                                    │ video timestamp
+                                    v
+                         ┌─────────────────────┐
+                         │ Image Preprocess    │
+                         │ resize/colorspace   │
+                         └──────────┬──────────┘
+                                    v
+                         ┌─────────────────────┐
+                         │ RKNN Runtime / NPU  │
+                         └──────────┬──────────┘
+                                    v
+                         ┌─────────────────────┐
+                         │ Mask Postprocess    │
+                         │ center/confidence   │
+                         └──────────┬──────────┘
+                                    v
+                         ┌─────────────────────┐
+                         │ dx/dy Calculation   │
+                         │ filter/dead zone/P  │
+                         └──────────┬──────────┘
+                                    │ UART
+                                    v
+                         ┌─────────────────────┐
+                         │ MCU / RTOS Gimbal   │
+                         │ PWM/limit/E-stop    │
+                         └─────────────────────┘
+
+Microphone ─────────────> ALSA PCM Capture
+                          audio samples
+                          audio timestamp
+                                    │
+                                    v
+Video + Audio + Status ─> Timestamp Alignment
+                          Encode / Mux
+                                    │
+                         ┌──────────┴──────────┐
+                         v                     v
+                  Network Return         Local Recording
+                  PC Viewer              SD Card / Storage
 ```
 
-必须实机确认，不得猜测：
+# 三、产品阶段规划
+
+项目当前阶段规划为：
+
+* V0：产品定义与边界控制
+* V1：RK3588 基础环境与工具链
+* V2：Camera / V4L2 视频采集链路
+* V2A：Audio / ALSA 采集与音视频时钟基线
+* V3：足球分割模型迁移与 RKNN 推理
+* V4：足球位置后处理与目标偏差计算
+* V5：Linux → MCU/RTOS 通信协议
+* V6：MCU/RTOS 云台电机控制
+* V7：端到端闭环追踪
+* V8：音视频同步、网络回传与本地录制
+* V9：性能、稳定性、SD 存储可靠性和产品化交付
+* V10：README、用户手册、简历和面试包装
+
+## V2：本次执行阶段
+
+V2 只完成 Camera/V4L2 视频采集。
+
+但为了以后做音视频同步，V2 必须额外保存：
+
+* V4L2 buffer sequence；
+* V4L2 buffer timestamp；
+* timestamp clock type；
+* timestamp source；
+* DQBUF 完成时的 `CLOCK_MONOTONIC` 时间；
+* frame interval；
+* sequence gap；
+* timestamp 是否单调递增；
+* 每帧 `bytesused`；
+* poll/DQBUF 错误统计。
+
+V2 不采集音频。
+
+## V2A：后续独立完成
+
+V2A 完成：
+
+* ALSA 声卡和 PCM 设备枚举；
+* 麦克风录音；
+* ALSA C/C++ capture；
+* PCM format/rate/channel/period/buffer 配置；
+* PCM ring buffer；
+* XRUN 检测与恢复；
+* 音频时间戳；
+* 音频采集稳定性；
+* 音视频公共时间基线设计。
+
+# 四、V0 和 V1 当前状态
+
+V0 已完成，已明确项目不是 AI demo，而是边缘视觉云台追踪产品。
+
+V1 已完成，并已经验证：
+
+1. RK3588 开发板能够稳定启动；
+2. 串口、SSH 或本地终端登录稳定；
+3. 板卡信息已经记录；
+4. Bootloader 信息已经记录；
+5. Linux kernel 信息已经记录；
+6. RootFS 和发行版信息已经记录；
+7. CPU 架构已经确认；
+8. 内存和存储信息已经记录；
+9. 网络信息已经记录；
+10. 设备节点已经记录；
+11. RKNPU 驱动已经确认；
+12. RKNN Runtime 已经确认；
+13. RKNPU 驱动与 RKNN Runtime 版本已经核对；
+14. C 程序编译部署链路已经跑通；
+15. C++ 程序编译部署链路已经跑通；
+16. ELF 和 ABI 已经验证。
+
+# 五、V2 一句话目标
+
+V2 的目标是：
+
+识别 RK3588 上真正对应摄像头视频采集的 `/dev/videoX` 节点，明确摄像头能力、总线、像素格式、分辨率、帧率和 buffer 类型，通过 Linux V4L2 streaming I/O 的 mmap 方式稳定采集视频帧，保存至少一张可验证图像，并输出 fps、掉帧、buffer sequence 和时间戳统计。
+
+V2 最小验证不是识别足球。
+
+V2 最小验证也不是打开一个 OpenCV 窗口。
+
+V2 完成的标志是：
 
 ```text
-开发板完整商品型号：TBD
-PCB 版本：TBD
-Device Tree model：TBD
-Device Tree compatible：TBD
-实际 SoC 是 RK3588 还是其他型号：TBD
-启动介质是 eMMC、SD 还是其他介质：TBD
-Bootloader 版本：TBD
-固件名称和发布日期：TBD
-Linux Kernel 版本：TBD
-RootFS/发行版：TBD
-CPU 内核架构：TBD
-用户空间位数：TBD
-libc 类型和版本：TBD
-串口调试接口电平：必须查官方资料
-串口调试波特率：必须查官方资料
-串口引脚：必须查官方资料
-板端用户名：TBD
-板端 IP：TBD
-开发主机系统和架构：TBD
-交叉工具链来源和版本：TBD
-RKNPU 驱动状态：TBD
-RKNN Runtime 状态：TBD
-rknn_server 状态：TBD
+正确识别 Camera 节点
+→ V4L2 能力和格式有证据
+→ mmap buffer 流程跑通
+→ 连续稳定采集
+→ 保存有效帧
+→ 输出 fps、sequence 和 timestamp 统计
+→ 形成测试报告
 ```
 
-对具体板卡型号的确认优先使用：
+# 六、V2 严格边界
 
-1. 包装和订单商品名称；
-2. PCB 丝印；
-3. 正点原子官方产品页或用户手册；
-4. `/proc/device-tree/model`；
-5. `/proc/device-tree/compatible`；
-6. `/proc/cpuinfo`；
-7. `dmesg`；
-8. 固件发布说明。
+V2 不做：
 
-商品名、PCB 名称、Device Tree model 和 SoC 名称必须分别记录，不能混为一项。
+1. 不运行足球模型；
+2. 不转换 ONNX；
+3. 不调用 RKNN Runtime 推理；
+4. 不解析足球 mask；
+5. 不计算足球中心点；
+6. 不计算 dx/dy；
+7. 不发送 UART 控制命令；
+8. 不编写 MCU 固件；
+9. 不控制云台；
+10. 不采集麦克风音频；
+11. 不做音视频同步；
+12. 不做视频编码产品链路；
+13. 不做音视频 mux；
+14. 不做网络视频回传；
+15. 不做 SD 卡正式录像；
+16. 不做 RTSP；
+17. 不做 H.264 产品集成；
+18. 不做 GStreamer 产品 pipeline；
+19. 不做复杂 UI；
+20. 不做 DMABUF/RGA 零拷贝优化，除非 mmap 完全不受驱动支持；
+21. 不做 MIPI Camera bring-up，除非摄像头已经被开发板官方 BSP 正确适配；
+22. 不把 OpenCV `VideoCapture` 作为 V2 的主采集实现。
 
-# 六、资料搜索要求
+允许使用 OpenCV 或 FFmpeg 做离线图像格式转换、查看或辅助验证，但不能用它们代替 V4L2 mmap 采集证据。
 
-遇到板卡、固件、串口、驱动、工具链或 Runtime 问题时，必须进行网页搜索。
+V2 可以将少量采集帧写入当前 RootFS 作为测试证据，但这不等于完成 SD 卡本地录制功能。
+
+# 七、实际摄像头信息以及硬件信息
+
+```text
+开发板厂商：正点原子
+SoC：[已确认 RK3588]
+Linux kernel：[5.10]
+
+摄像头类型：[imx415]
+摄像头厂商和型号：[正点原子 ATK-MCIMX415 ]
+USB VID:PID：[如果是 USB 摄像头，待检测]
+摄像头连接接口：[MIPI CSI，4 通道]
+候选 /dev/videoX：[待检测]
+是否存在 /dev/v4l/by-id：[待检测]
+是否存在 Media Controller topology：[待检测]
+
+输入频率 24 MHz / 27 MHz / 37.125 MHz / 72 MHz / 74.25 MHz
+建议分辨率 3840 (H) × 2160 (V)，8.29M 像素
+输出速度 全像素扫描模式最大帧率 A/D 12 位: 90.9 帧/秒
+支持 I/O CSI-2 串行数据输出（2 通道/4 通道，RAW10/RAW12 输出）
+
+MVP 分辨率：[可选]
+MVP 帧率：[可选]
+MVP 像素格式：[MJPG / YUYV / NV12 / 其他，待检测]
+Buffer 类型：[single-planar / multi-planar，待检测]
+
+```
+
+摄像头引脚定义
+| J3-排针接口号 | 管脚名         | 说明                    |
+| -------- | ----------- | --------------------- |
+| 1        | CSI\_D3\_P  | MIPI CSI 发送通道 3 差分正信号 |
+| 2        | GND         | 接地                    |
+| 3        | CSI\_D3\_N  | MIPI CSI 发送通道 3 差分负信号 |
+| 4        | CSI\_D2\_P  | MIPI CSI 发送通道 2 差分正信号 |
+| 5        | GND         | 接地                    |
+| 6        | CSI\_D2\_N  | MIPI CSI 发送通道 2 差分负信号 |
+| 7        | CSI\_CLK\_P | MIPI CSI 输出时钟差分正信号    |
+| 8        | GND         | 接地                    |
+| 9        | CSI\_CLK\_N | MIPI CSI 输出时钟差分负信号    |
+| 10       | CSI\_D0\_P  | MIPI CSI 发送通道 0 差分正信号 |
+| 11       | GND         | 接地                    |
+| 12       | CSI\_D0\_N  | MIPI CSI 发送通道 0 差分负信号 |
+| 13       | CSI\_D1\_P  | MIPI CSI 发送通道 1 差分正信号 |
+| 14       | GND         | 接地                    |
+| 15       | CSI\_D1\_N  | MIPI CSI 发送通道 1 差分负信号 |
+| 16       | CSI\_RST    | 复位信号                  |
+| 17       | GND         | 接地                    |
+| 18       | CSI\_PDN    | 控制信号，使能模组电源           |
+| 19       | CSI\_CLK\_R | 时钟信号                  |
+| 20       | I2C\_SCL    | I2C 时钟信号              |
+| 21       | VCC3.3      | 输入电源                  |
+| 22       | I2C\_SDA    | I2C 数据/地址传输信号         |
+
+
+
+
+如果某项未知，应给出检测方法，并记录为 `TBD`、`UNKNOWN` 或 `NOT_APPLICABLE`。
+
+# 八、资料搜索要求
+
+遇到摄像头、V4L2、驱动、设备节点或板卡拓扑问题时，必须网页搜索。
 
 资料优先级：
 
-1. 正点原子官方产品资料、用户手册、Wiki、网盘资料、BSP、SDK 和官方论坛；
-2. 正点原子该板卡对应固件发布说明；
-3. Rockchip 官方 RK3588、Linux SDK 和内核资料；
-4. `airockchip/rknn-toolkit2` 官方仓库；
-5. `airockchip/rknn_model_zoo` 官方仓库；
-6. Linux Kernel 官方文档；
-7. GCC、binutils、CMake、systemd 等官方文档；
-8. 高质量社区资料仅作补充。
+1. Linux Kernel V4L2 官方文档；
+2. LinuxTV/v4l-utils 官方资料；
+3. 开发板厂商官方 Wiki、官方手册和官方 BSP；
+4. 摄像头厂商官方资料；
+5. Rockchip 官方媒体和 Camera 文档；
+6. 高质量社区资料只能补充，不能覆盖官方资料。
 
-必须区分：
+MIPI 摄像头，优先确认：
 
-* 正点原子针对该板卡发布的软件；
-* Rockchip 通用 SDK；
-* 主线 Linux；
-* 第三方镜像；
-* 网络博客中的旧版教程。
+* Sensor；
+* D-PHY；
+* CSI；
+* CIF/VICAP；
+* ISP；
+* Media Controller topology；
+* 最终 capture node。
 
-不要把其他厂商 RK3588 开发板的命令直接套到正点原子开发板。
+不能仅凭 `/dev/video0` 的编号认定它就是目标摄像头。
 
-不得从旧教程中直接执行：
+# 九、V2 必须产出的交付物
 
-```bash
-cp librknnrt.so /usr/lib/
-cp rknn_server /usr/bin/
-apt full-upgrade
-do-release-upgrade
-rmmod <driver>
-insmod <unknown_driver>
-dd if=<image> of=<device>
-```
-
-只有在确认文件来源、架构、版本、ABI、备份、回滚和厂商建议后，才允许提出修改方案。
-
-# 七、V1 双门禁定义
-
-## 7.1 V1-Core 门禁
-
-V1-Core 解决基础 Linux/BSP/应用开发环境问题。
-
-V1-Core PASS 后允许进入 V2 Camera/V4L2。
-
-V1-Core 至少要求：
-
-1. 开发板稳定上电；
-2. 串口、SSH 或本地终端至少一种方式稳定登录；
-3. 板卡厂商、商品型号、PCB 版本或 UNKNOWN 已记录；
-4. SoC 有实机证据；
-5. Bootloader、Kernel、RootFS 信息已记录；
-6. Device Tree model/compatible 已记录；
-7. 内核架构、用户空间位数、libc/ABI 已记录；
-8. 8GB 内存和 64GB eMMC 已通过实机数据核验；
-9. 分区、挂载点和可用空间已记录；
-10. 网络信息已记录；
-11. 关键设备节点摘要已记录；
-12. 原始启动或内核日志已保存；
-13. 本地编译或交叉编译至少一条链路成功；
-14. C 或 C++ 程序在 RK3588 实际运行成功；
-15. ELF 架构、interpreter 和动态依赖验证通过；
-16. V1 文档和 Git 提交完成。
-
-## 7.2 V1-NPU-Ready 门禁
-
-V1-NPU-Ready 解决进入 V3 前的 NPU 软件栈准备问题。
-
-至少要求：
-
-1. RKNPU 驱动状态有证据；
-2. 驱动内建或模块加载方式已记录；
-3. 相关内核日志已保存；
-4. RKNN Runtime 路径和 ELF 架构已确认；
-5. Runtime 版本已确认，或以 UNKNOWN + 来源 + SHA-256 记录；
-6. Runtime 的动态依赖可以解析；
-7. rknn_server 状态已记录；
-8. 无模型 `dlopen()` 测试已完成；
-9. 核心 RKNN API 符号已检查；
-10. 没有加载模型或执行推理。
-
-门禁规则：
+建议目录：
 
 ```text
-V1-Core PASS + V1-NPU-Ready PASS
-    → 允许进入 V2，且已经具备未来进入 V3 的环境条件
-
-V1-Core PASS + V1-NPU-Ready BLOCKED
-    → 允许进入 V2 Camera/V4L2
-    → 不允许进入 V3 RKNN 推理
-    → 必须保留 NPU 阻塞项和修复计划
-
-V1-Core FAIL 或 BLOCKED
-    → 不允许进入 V2
-```
-
-不得因为 Runtime 缺失而伪装 V1-NPU-Ready 完成，也不得因为 Runtime 缺失而阻止一个已经通过 V1-Core 的项目开展纯 Camera/V4L2 验证。
-
-# 八、V1 交付物
-
-在现有仓库中新增：
-
-```text
-docs/v1_env/
+VisionArm-BallTrack/
 ├── README.md
-├── environment_report.md
-├── boot_chain_report.md
-├── storage_network_report.md
-├── toolchain_report.md
-├── npu_stack_report.md
-├── vendor_materials.md
-└── v1_acceptance.md
-
-tools/v1_env/
-├── README.md
-├── collect_board_info.sh
-├── hello_c.c
-├── hello_cpp.cpp
-└── rknn_runtime_probe.c
-
-logs/v1_env/
-├── README.md
-├── session_metadata.txt
-├── boot_full.log
-├── journal_boot.log
-├── dmesg.log
-├── uname.txt
-├── os_release.txt
-├── board_identity.txt
-├── device_tree.txt
-├── cpuinfo.txt
-├── memory_storage.txt
-├── partition_map.txt
-├── network.txt
-├── device_nodes.txt
-├── thermal_power.txt
-├── tool_versions.txt
-├── native_build.log
-├── cross_build.log
-├── elf_inspection.log
-├── rknpu_driver.txt
-├── rknn_runtime.txt
-├── runtime_probe.log
-└── manifest.sha256
-
-build/v1_env/
-├── native/
-└── cross/
+├── docs/
+│   └── v2_camera_v4l2/
+│       ├── README.md
+│       ├── device_inventory.md
+│       ├── capture_design.md
+│       ├── performance_report.md
+│       ├── troubleshooting.md
+│       └── v2_acceptance.md
+├── src/
+│   └── linux_app/
+│       └── camera/
+│           ├── CMakeLists.txt
+│           ├── v4l2_capture.h
+│           ├── v4l2_capture.cpp
+│           └── main.cpp
+├── tools/
+│   └── v2_camera/
+│       ├── collect_v4l2_info.sh
+│       ├── convert_frame.sh
+│       └── inspect_frame.sh
+├── build/
+│   └── v2_camera/
+├── logs/
+│   └── v2_camera/
+│       ├── list_devices.txt
+│       ├── device_nodes.txt
+│       ├── udev_info.txt
+│       ├── usb_info.txt
+│       ├── media_topology.txt
+│       ├── v4l2_all.txt
+│       ├── formats.txt
+│       ├── controls.txt
+│       ├── compliance.txt
+│       ├── smoke_test.log
+│       ├── stability_test.log
+│       └── frames.csv
+└── reports/
+    └── images/
+        └── v2/
+            ├── first_frame.raw
+            ├── first_frame.jpg
+            └── first_frame.png
 ```
 
 P0 必须完成：
 
-* `environment_report.md`
-* `toolchain_report.md`
-* `v1_acceptance.md`
-* 只读环境采集脚本
-* C 或 C++ hello 至少一个
-* 至少一条编译部署链路
-* 板卡身份、系统、存储、网络、ELF/ABI 原始日志
-* Git 提交
+1. `v4l2-ctl --list-devices` 输出；
+2. `/dev/video*` 和稳定设备路径记录；
+3. 正确识别目标 capture node；
+4. `v4l2-ctl --all`；
+5. `v4l2-ctl --list-formats-ext`；
+6. 当前格式和帧率；
+7. V4L2 mmap 采集源码；
+8. 至少一张可验证采集帧；
+9. fps 统计；
+10. sequence gap 统计；
+11. timestamp 统计；
+12. 连续稳定性测试；
+13. V2 测试报告；
+14. README 更新；
+15. Git 提交。
 
 P1 推荐完成：
 
-* 完整串口启动日志
-* 本地编译和交叉编译两条链路
-* `npu_stack_report.md`
-* Runtime 无模型探针
-* 原始日志 SHA-256 清单
-* 官方资料版本和下载文件 SHA-256
+1. `/dev/v4l/by-id` 或 `/dev/v4l/by-path` 稳定映射；
+2. `udevadm info`；
+3. `lsusb` 和 USB topology；
+4. `media-ctl -p`；
+5. `v4l2-compliance`；
+6. 多种格式、分辨率和帧率对比；
+7. CPU 占用；
+8. 内存占用；
+9. 10 分钟以上稳定测试；
+10. 自动信息收集脚本。
 
-P2 可以延期：
+P2 可延期：
 
-* 全量 SDK 编译
-* U-Boot 编译
-* Kernel 编译
-* RootFS 定制
-* Docker 构建环境
-* CI
-* 性能 governor 调优
-* NPU 模型测试
-* Camera 测试
-* STM32 和云台测试
+1. DMABUF；
+2. RGA；
+3. DRM 显示；
+4. GStreamer；
+5. MPP 编码；
+6. H.264；
+7. RTSP；
+8. ALSA；
+9. 音视频同步；
+10. SD 卡录制；
+11. 多摄像头；
+12.复杂 ISP 调优。
 
-不适用的文件必须写 `NOT_APPLICABLE`；缺失项写 `MISSING`；尚未确认写 `UNKNOWN`；受阻写 `BLOCKED`。不得伪造日志。
+# 十、你第一次回复必须严格输出以下 13 部分
 
-# 九、工作方式
+## 1. V2 一句话目标
 
-严格按小步交互方式协作。
+说明 V2 解决什么产品问题，以及为什么必须先独立验证 Camera/V4L2，再进入模型和音频阶段。
 
-1. 先执行只读检测；
-2. 每轮只给一组目标明确的命令；
-3. 所有命令注明在“开发主机”还是“RK3588 板端”执行；
-4. 命令尽量使用 `tee` 保存原始输出；
-5. 我贴出输出后逐行分析；
-6. 每个检查项标记 `PASS`、`WARN`、`FAIL`、`BLOCKED` 或 `UNKNOWN`；
-7. 明确指出判断依据来自哪段输出；
-8. 没有证据时禁止猜测；
-9. 原始日志与分析报告分开；
-10. 不允许人工修改原始日志来匹配结论；
-11. 修改系统前必须说明风险、备份和回滚；
-12. 发现问题时先给最小修复方案；
-13. 不要一遇到问题就建议重刷系统；
-14. 不要一次性升级整个系统；
-15. 不跳过阶段验收；
-16. 不提前进入 V2、V3、V5 或 V6；
-17. 所有文档必须基于真实命令输出；
-18. 最终给出 V1-Core 和 V1-NPU-Ready 两套结论。
+## 2. V2 不做什么
 
-# 十、第一轮回复要求
+明确摄像头采集之外的所有边界。
 
-第一轮不要一次性输出全部文档、全部脚本、全部代码和全部后续步骤。
+必须提醒：
+* 音频属于 V2A；
 
-第一轮严格只完成以下内容：
+## 3. V2 最小可交付物
 
-## 1. 项目和硬件基线复述
+按 P0、P1、P2 列出：
 
-明确复述：
+* 文档；
+* 命令输出；
+* 源码；
+* 脚本；
+* 原始帧；
+* 可视化图；
+* CSV；
+* 性能数据；
+* Git 提交。
 
-* 正点原子 RK3588 开发板；
-* 8GB RAM + 64GB eMMC；
-* 具体板卡商品型号待实机确认；
-* OV5640 属于 V2；
-* STM32F1、UART/CAN 和云台属于后续阶段；
-* V1 只建立环境基线。
+## 4. 推荐目录结构
 
-## 2. V1 双门禁说明
+给出本阶段应新增的完整目录树，并解释每个文件用途。
 
-简要说明：
+## 5. 当前阶段 Markdown 文档模板
 
-* V1-Core 通过后允许进入 V2；
-* V1-NPU-Ready 必须在进入 V3 前通过；
-* V1 不加载模型。
+### `docs/v2_camera_v4l2/device_inventory.md`
 
-## 3. 第一批目录创建命令
+至少包含：
 
-只创建 V1 所需目录，不重建整个仓库：
+* 开发板；
+* Kernel；
+* Camera 类型；
+* Camera 型号；
+* 接口；
+* 驱动；
+* USB VID:PID；
+* USB 速度；
+* 所有 `/dev/videoX`；
+* `/dev/v4l/by-id`；
+* `/dev/v4l/by-path`；
+* Media Controller；
+* 每个节点的 driver/card/bus_info；
+* capability；
+* 最终选择的 capture node；
+* 选择依据；
+* 未知项。
 
-```bash
-mkdir -p docs/v1_env
-mkdir -p tools/v1_env
-mkdir -p logs/v1_env
-mkdir -p build/v1_env/native
-mkdir -p build/v1_env/cross
-```
+### `docs/v2_camera_v4l2/capture_design.md`
 
-## 4. Step A：只读环境盘点
+至少包含：
 
-提供第一版完整的：
+* 设计目标；
+* V4L2 采集流程；
+* 为什么选 mmap；
+* 为什么不使用 OpenCV VideoCapture 作为主采集；
+* single-planar 与 multi-planar 判断；
+* 像素格式选择；
+* 分辨率和 fps 选择；
+* buffer 数量；
+* poll/非阻塞策略；
+* frame metadata；
+* timestamp 设计；
+* sequence gap 设计；
+* 保存帧策略；
+* 错误处理；
+* 资源清理；
+* 后续与 RKNN、ALSA 和媒体输出的接口。
+
+### `docs/v2_camera_v4l2/performance_report.md`
+
+至少包含：
+
+* 测试环境；
+* Camera 和节点；
+* 测试格式；
+* 分辨率；
+* 目标 fps；
+* 实测 fps；
+* 总帧数；
+* 运行时间；
+* sequence gap；
+* poll timeout；
+* DQBUF 错误；
+* timestamp 回退；
+* timestamp delta 平均值；
+* timestamp delta 最小值；
+* timestamp delta 最大值；
+* timestamp jitter；
+* 平均 bytesused；
+* CPU 占用；
+* 内存占用；
+* 测试时长；
+* 原始日志位置；
+* 结论。
+
+### `docs/v2_camera_v4l2/troubleshooting.md`
+
+至少包含：
+
+* 节点选错；
+* 权限错误；
+* `VIDIOC_QUERYCAP` 失败；
+* 不支持 streaming；
+* 不支持 MMAP；
+* `VIDIOC_S_FMT` 后格式被驱动调整；
+* `VIDIOC_S_PARM` 不生效；
+* `REQBUFS` 失败；
+* `QUERYBUF` 失败；
+* `mmap` 失败；
+* `QBUF` 失败；
+* `STREAMON` 失败；
+* poll timeout；
+* `DQBUF` EAGAIN；
+* `DQBUF` EIO；
+* sequence gap；
+* timestamp 不单调；
+* USB 带宽不足；
+* MJPG 与 YUYV 选择；
+* 帧文件无法查看；
+* 摄像头被其他进程占用；
+* 拔插后 video node 改变。
+
+### `docs/v2_camera_v4l2/v2_acceptance.md`
+
+至少包含：
+
+* 验收项；
+* 证据；
+* PASS/WARN/FAIL/BLOCKED；
+* 阻塞问题；
+* 修复动作；
+* 是否允许进入 V2A；
+* 是否允许进入 V3；
+* 最终结论。
+
+还要给出 README 中 V2 阶段状态和 Camera 环境章节模板。
+
+## 6. 技术链路图或文字流程
+
+必须给出以下流程。
+
+### 设备识别流程
 
 ```text
-tools/v1_env/collect_board_info.sh
+Camera Connection
+→ Kernel Driver Binding
+→ /dev/videoX Nodes
+→ v4l2-ctl --list-devices
+→ QUERYCAP
+→ driver/card/bus_info
+→ capability 判断
+→ 选择真正的 capture node
+```
+
+### V4L2 mmap 流程
+
+```text
+open()
+→ VIDIOC_QUERYCAP
+→ 检查 VIDEO_CAPTURE 或 VIDEO_CAPTURE_MPLANE
+→ 检查 STREAMING
+→ VIDIOC_G_FMT
+→ VIDIOC_S_FMT
+→ VIDIOC_G_FMT 再确认
+→ 可选 VIDIOC_S_PARM
+→ VIDIOC_REQBUFS
+→ VIDIOC_QUERYBUF
+→ mmap()
+→ VIDIOC_QBUF 全部 buffer
+→ VIDIOC_STREAMON
+→ poll()
+→ VIDIOC_DQBUF
+→ 读取 frame metadata
+→ 处理/保存 frame
+→ VIDIOC_QBUF
+→ 循环
+→ VIDIOC_STREAMOFF
+→ munmap()
+→ close()
+```
+
+### V2 到后续阶段的数据接口
+
+```text
+V4L2 Capture
+→ FrameBuffer {
+    data
+    bytes_used
+    width
+    height
+    pixel_format
+    frame_id
+    v4l2_sequence
+    capture_timestamp
+    dequeue_monotonic_timestamp
+    timestamp_flags
+  }
+→ V3 Preprocess / RKNN
+→ V8 Video Timestamp Alignment
+```
+
+必须解释：
+
+V2 保存时间戳和 sequence，是为后续音视频同步、延迟测量和掉帧分析做准备，但 V2 不做真正的音视频同步。
+
+## 7. 具体执行步骤
+
+必须按以下顺序推进。
+
+### Step A：物理设备和驱动识别
+
+确认：
+
+* Camera 类型；
+* 连接接口；
+* 驱动；
+* USB 或 Media topology；
+* 所有 video node；
+* 稳定设备路径。
+
+### Step B逐节点能力盘点
+
+对所有候选节点执行 capability、format、control 检查，不能默认 `/dev/video0`。
+
+### Step C：选择 MVP 格式
+
+至少比较：
+
+* MJPG；
+* YUYV；
+* NV12 或设备实际支持格式。
+
+从以下维度选择：
+
+* 是否由摄像头原生输出；
+* USB 带宽；
+* CPU 解码成本；
+* 后续 RKNN 预处理便利性；
+* 分辨率；
+* 帧率；
+* 稳定性。
+
+不得只因为某格式看起来“高级”就选择。
+
+### Step D：使用 `v4l2-ctl` 做 mmap 烟雾测试
+
+先证明驱动和设备链路可采集。
+
+### Step E：编写 V4L2 mmap 采集程序
+
+必须使用 Linux 系统调用和 ioctl，不得使用 OpenCV VideoCapture 替代。
+
+### Step F：保存并验证一张图像
+
+需要区分：
+
+* MJPG：buffer 可以保存为 `.jpg`，但必须验证文件头和可解码性；
+* YUYV：保存原始 `.yuyv`，再离线转换；
+* NV12：保存原始 `.nv12`，再离线转换；
+* 其他格式：根据 fourcc 正确处理。
+
+### Step G：短时性能测试
+
+建议：
+
+* 300 帧或 30 秒；
+* 输出 fps；
+* sequence gap；
+* timestamp delta；
+* poll timeout；
+* DQBUF 错误。
+
+### Step H：稳定性测试
+
+建议初始测试：
+
+* 10 分钟连续采集；
+* 不保存每一帧，只保存日志和少量样本；
+* 统计实际 fps；
+* 统计掉帧；
+* 统计 timestamp 是否单调；
+* 统计资源占用。
+
+如果存储空间有限，降低保存数量，不能取消稳定采集。
+
+### Step I：生成报告和验收
+
+原始输出、分析报告和结论必须分开保存。
+
+## 8. 推荐命令、代码和配置示例
+
+所有设备路径、格式、尺寸和帧率必须使用检测结果或占位符，不能猜测。
+
+### 8.1 创建目录
+
+```bash
+mkdir -p docs/v2_camera_v4l2
+mkdir -p src/linux_app/camera
+mkdir -p tools/v2_camera
+mkdir -p build/v2_camera
+mkdir -p logs/v2_camera
+mkdir -p reports/images/v2
+```
+
+### 8.2 基础设备枚举
+
+至少包括：
+
+```bash
+date -Ins | tee logs/v2_camera/test_time.txt
+
+v4l2-ctl --version \
+  | tee logs/v2_camera/v4l2_ctl_version.txt
+
+v4l2-ctl --list-devices \
+  | tee logs/v2_camera/list_devices.txt
+
+ls -al /dev/video* 2>/dev/null \
+  | tee logs/v2_camera/device_nodes.txt
+
+ls -al /dev/v4l/by-id 2>/dev/null \
+  | tee logs/v2_camera/by_id.txt
+
+ls -al /dev/v4l/by-path 2>/dev/null \
+  | tee logs/v2_camera/by_path.txt
+```
+
+### 8.3 驱动和硬件信息
+
+USB 摄像头时至少包括：
+
+```bash
+lsusb | tee logs/v2_camera/lsusb.txt
+lsusb -t | tee logs/v2_camera/lsusb_tree.txt
+
+dmesg | grep -iE 'uvc|video|camera|usb' \
+  | tee logs/v2_camera/camera_dmesg.txt
+
+lsmod | grep -iE 'uvcvideo|videodev|v4l2' \
+  | tee logs/v2_camera/camera_modules.txt
+```
+
+如果已知 VID:PID，再给出：
+
+```bash
+lsusb -v -d <VID:PID> \
+  > logs/v2_camera/usb_descriptor.txt 2>&1
+```
+
+不得在未知 VID:PID 时编造值。
+
+MIPI/Media Controller 摄像头时至少包括：
+
+```bash
+media-ctl -p \
+  | tee logs/v2_camera/media_topology.txt
+```
+
+如果存在多个 media node，应逐个检查。
+
+### 8.4 udev 信息
+
+```bash
+udevadm info --query=all --name=<VIDEO_DEVICE> \
+  | tee logs/v2_camera/udev_info.txt
+```
+
+### 8.5 逐节点 V4L2 能力
+
+对每个候选 `/dev/videoX` 执行：
+
+```bash
+v4l2-ctl -d <VIDEO_DEVICE> --all \
+  | tee logs/v2_camera/v4l2_all_<NODE>.txt
+
+v4l2-ctl -d <VIDEO_DEVICE> --list-formats-ext \
+  | tee logs/v2_camera/formats_<NODE>.txt
+
+v4l2-ctl -d <VIDEO_DEVICE> --list-ctrls-menus \
+  | tee logs/v2_camera/controls_<NODE>.txt
+
+v4l2-ctl -d <VIDEO_DEVICE> --get-fmt-video \
+  | tee logs/v2_camera/current_format_<NODE>.txt
+
+v4l2-ctl -d <VIDEO_DEVICE> --get-parm \
+  | tee logs/v2_camera/current_parm_<NODE>.txt
+```
+
+如果节点是 multi-planar，给出适用的命令和代码调整方式。
+
+### 8.6 可选 compliance
+
+```bash
+v4l2-compliance -d <VIDEO_DEVICE> \
+  > logs/v2_camera/compliance.txt 2>&1
+```
+
+说明：
+
+`v4l2-compliance` 失败不一定代表无法完成产品采集，但必须保存并分析失败项。
+
+### 8.7 `v4l2-ctl` mmap 烟雾测试
+
+先使用设备实际支持的格式：
+
+```bash
+v4l2-ctl -d <VIDEO_DEVICE> \
+  --set-fmt-video=width=<WIDTH>,height=<HEIGHT>,pixelformat=<FOURCC> \
+  --set-parm=<FPS> \
+  --stream-mmap=4 \
+  --stream-count=<FRAME_COUNT> \
+  --stream-to=<OUTPUT_FILE> \
+  > logs/v2_camera/v4l2_ctl_stream.log 2>&1
+```
+
+如果当前版本不支持某个选项，必须先执行：
+
+```bash
+v4l2-ctl --help-streaming
+```
+
+根据当前板端 v4l-utils 版本调整，不能盲目照搬命令。
+
+### 8.8 摄像头占用检查
+
+至少提供：
+
+```bash
+fuser -v <VIDEO_DEVICE> 2>/dev/null || true
+lsof <VIDEO_DEVICE> 2>/dev/null || true
+```
+
+### 8.9 完整信息收集脚本
+
+直接提供可运行的：
+
+```text
+tools/v2_camera/collect_v4l2_info.sh
 ```
 
 脚本要求：
 
 1. 使用 `#!/usr/bin/env bash`；
-2. 只读，不修改系统；
+2. 不修改系统；
 3. 不安装软件；
-4. 不重启；
-5. 不替换库；
-6. 单个命令失败后继续执行；
-7. 每个检测块有标题；
-8. 同时显示到终端并写入 `logs/v1_env/`；
-9. 记录开始时间、结束时间、执行用户和 hostname；
-10. 收集板卡身份、Device Tree、Kernel、RootFS、CPU、libc、内存、eMMC、分区、挂载、网络和设备节点；
-11. 记录 gcc/g++/make/cmake/pkg-config 是否存在和版本；
-12. 只记录 `/dev/video*`，不打开摄像头；
-13. 只记录 UART/CAN 相关信息，不收发数据；
-14. 收集 RKNPU/RKNN 相关日志和文件位置；
-15. 避免无限扫描 `/proc`、`sys`、`/dev`；
-16. 查找 Runtime 时只扫描 `/usr`、`/lib`、`/lib64`、`/opt` 等合理路径；
-17. 普通用户可运行；
-18. 权限不足时明确提示；
-19. 不默认使用 sudo；
-20. 最后生成 `logs/v1_env/manifest.sha256`。
+4. 不自动改变摄像头 controls；
+5. 支持传入 `/dev/videoX`；
+6. 未传设备时只做枚举；
+7. 每个命令有标题；
+8. 输出同时显示在终端并保存；
+9. 单个命令失败时继续；
+10. 记录命令和时间；
+11. 避免无限扫描；
+12. 对不存在的工具给出 `SKIPPED`；
+13. 对权限问题给出提示；
+14. 不默认使用 sudo。
 
-## 5. 执行说明
+### 8.10 V4L2 mmap 程序
 
-明确告诉我：
-
-* 哪些命令在 RK3588 执行；
-* 是否需要从仓库根目录执行；
-* 如何给脚本增加执行权限；
-* 如何运行；
-* 运行后需要贴回哪些日志摘要；
-* 不要在第一轮要求安装任何包。
-
-第一轮结束后停止，等待我贴出真实输出。
-
-# 十一、后续步骤顺序
-
-收到 Step A 输出后，按以下顺序继续：
+直接提供完整可编译的 C++ 实现，包括：
 
 ```text
-Step A：只读环境盘点
-→ Step B：板卡型号和官方资料对应
-→ Step C：串口完整启动日志
-→ Step D：板端本地 C/C++ 编译
-→ Step E：开发主机交叉编译
-→ Step F：ELF、interpreter、libc 和 ABI 检查
-→ Step G：RKNPU 驱动盘点
-→ Step H：RKNN Runtime 和 rknn_server 盘点
-→ Step I：无模型 Runtime Probe
-→ Step J：生成 V1 报告
-→ Step K：V1-Core / V1-NPU-Ready 验收
-→ Step L：Git 提交
+src/linux_app/camera/
+├── CMakeLists.txt
+├── v4l2_capture.h
+├── v4l2_capture.cpp
+└── main.cpp
 ```
 
-每一步都必须给出：
+不得只给伪代码。
 
-* 目的；
-* 执行位置；
-* 前置条件；
-* 可复制命令；
-* 预期现象；
-* 输出日志路径；
-* PASS/WARN/FAIL/BLOCKED 判断；
-* 失败时的最小排查顺序；
-* 是否会修改系统；
-* 修改时的备份和回滚方式。
-
-# 十二、关键技术规则
-
-## 12.1 启动日志
-
-完整串口日志应从上电前开始采集。
-
-期望尽可能覆盖：
+程序至少支持：
 
 ```text
-SPL 或早期引导输出（如果厂商固件提供）
-→ U-Boot
-→ Linux Kernel
-→ init/systemd
-→ 登录提示
+--device <path>
+--width <value>
+--height <value>
+--format <FOURCC>
+--fps <value>
+--buffers <count>
+--frames <count>
+--timeout-ms <value>
+--output-dir <path>
+--save-first <count>
+--csv <path>
+--nonblock
 ```
 
-不得强制声称 BootROM 一定会输出串口日志。
+程序必须实现：
 
-如果只能获得 `dmesg` 或 `journalctl -b`，必须标记为替代日志，不能称为完整启动日志。
+1. `open()`；
+2. `VIDIOC_QUERYCAP`；
+3. 正确使用 `device_caps`；
+4. 检查 `V4L2_CAP_VIDEO_CAPTURE`；
+5. 检查 `V4L2_CAP_VIDEO_CAPTURE_MPLANE`；
+6. 检查 `V4L2_CAP_STREAMING`；
+7. `VIDIOC_G_FMT`；
+8. `VIDIOC_S_FMT`；
+9. 再次 `VIDIOC_G_FMT`，记录驱动最终接受的格式；
+10. 可选 `VIDIOC_S_PARM`；
+11. `VIDIOC_G_PARM` 确认实际参数；
+12. `VIDIOC_REQBUFS`；
+13. `VIDIOC_QUERYBUF`；
+14. `mmap()`；
+15. 所有 buffer 初始 `VIDIOC_QBUF`；
+16. `VIDIOC_STREAMON`；
+17. `poll()`；
+18. `VIDIOC_DQBUF`；
+19. 读取 `sequence`；
+20. 读取 `timestamp`；
+21. 读取 timestamp type flags；
+22. 读取 timestamp source flags；
+23. 记录 `bytesused`；
+24. 调用 `clock_gettime(CLOCK_MONOTONIC)` 记录 DQBUF 时间；
+25. 检测 sequence gap；
+26. 检测 timestamp 回退；
+27. 保存少量 frame；
+28. `VIDIOC_QBUF`；
+29. `VIDIOC_STREAMOFF`；
+30. `munmap()`；
+31. `close()`；
+32. SIGINT/SIGTERM 安全退出；
+33. 任意错误路径的资源清理。
 
-串口电平、引脚和波特率必须来自正点原子该型号官方资料，不得猜测。连接调试串口前必须提醒确认是 3.3V TTL 还是其他电平。
+程序必须输出汇总：
 
-## 12.2 编译链路
+```text
+requested_format
+actual_format
+requested_width
+actual_width
+requested_height
+actual_height
+requested_fps
+actual_fps_parameter
+buffer_count
+captured_frames
+elapsed_seconds
+measured_fps
+sequence_gaps
+estimated_dropped_frames
+poll_timeouts
+dqbuf_errors
+timestamp_regressions
+timestamp_delta_min_ms
+timestamp_delta_max_ms
+timestamp_delta_mean_ms
+timestamp_jitter_ms
+bytes_used_mean
+```
 
-至少完成一条：
+CSV 每帧至少包含：
 
-* RK3588 板端本地编译；
-* PC aarch64 交叉编译后部署运行。
+```text
+frame_index,
+v4l2_sequence,
+bytes_used,
+v4l2_timestamp_sec,
+v4l2_timestamp_usec,
+timestamp_type,
+timestamp_source,
+dq_monotonic_ns,
+sequence_gap,
+poll_wait_us
+```
 
-推荐两条都完成。
+第一版可以只完整支持 single-planar capture。
 
-测试程序至少输出：
+如果目标设备只支持 multi-planar：
 
-* 程序名称；
-* 编译日期和时间；
-* 编译器信息；
-* 指针位数；
-* `uname()` 结果。
+1. 必须明确标记；
+2. 不得强行按 single-planar 使用；
+3. 给出最小 multi-planar 适配方案；
+4. 可以把 multi-planar 支持作为当前 V2 的必要工作，而不是 P2。
 
-编译参数至少包含：
+### 8.11 CMake
+
+CMake 至少要求：
+
+* C++17；
+* `-Wall`；
+* `-Wextra`；
+* `-Wpedantic`；
+* Debug/Release 可选；
+* 不依赖 OpenCV；
+* 不依赖 GStreamer；
+* 不依赖 FFmpeg；
+* 仅依赖 Linux/V4L2 系统头文件和标准库。
+
+需要给出板端本地编译和交叉编译两种命令。
+
+### 8.12 原始帧检查
+
+至少使用：
 
 ```bash
--Wall -Wextra -Wpedantic
+file <FRAME_FILE>
+stat <FRAME_FILE>
+sha256sum <FRAME_FILE>
+xxd -l 32 <FRAME_FILE>
 ```
 
-必须检查：
+MJPG 帧还应验证能否正常解码。
+
+YUYV/NV12 应根据实际 width、height 和 pixel format 使用离线转换命令。
+
+离线转换可以使用 FFmpeg，但必须说明这只是格式转换，不是主采集链路。
+
+### 8.13 资源统计
+
+至少提供一种方式记录：
 
 ```bash
-file <binary>
-readelf -h <binary>
-readelf -l <binary>
-readelf -d <binary>
-ldd <binary>
-sha256sum <binary>
+pidstat -p <PID> 1
 ```
 
-重点确认：
+如果没有 `pidstat`，使用：
 
-* ELF class；
-* Machine；
-* target triple；
-* ELF interpreter；
-* libc；
-* 动态依赖；
-* 文件权限；
-* 实际板端运行结果。
+```bash
+top -b -d 1 -p <PID>
+```
 
-## 12.3 RKNN 软件栈
+同时记录：
 
-必须区分：
+```bash
+free -h
+df -hT
+```
+
+## 9. 最小验证实验
+
+必须定义以下实验。
+
+### 实验一：节点识别
+
+证明选中的 `/dev/videoX`：
+
+* 属于目标摄像头；
+* 具有 capture capability；
+* 具有 streaming capability；
+* 不是 metadata、codec 或其他无关节点；
+* 有稳定路径或明确的重新识别方法。
+
+### 实验二：格式枚举
+
+保存：
+
+* 所有 pixel format；
+* 分辨率；
+* frame interval；
+* controls；
+* 当前格式；
+* 最终 MVP 格式。
+
+### 实验三：工具级 mmap 采集
+
+使用 `v4l2-ctl` 成功采集至少一帧或一段原始数据。
+
+### 实验四：自研 mmap 程序采集
+
+必须由自研程序完成完整流程：
 
 ```text
-开发 PC：
-  RKNN-Toolkit2
-  模型转换、量化、分析
-
-RK3588 用户空间：
-  应用程序
-  librknnrt.so / RKNN Runtime
-
-RK3588 内核：
-  RKNPU Kernel Driver
-
-可选调试组件：
-  rknn_server
+REQBUFS
+→ QUERYBUF
+→ mmap
+→ QBUF
+→ STREAMON
+→ poll
+→ DQBUF
+→ QBUF
+→ STREAMOFF
 ```
 
-V1 只确认软件栈存在、架构正确、依赖可解析和 Runtime 可加载，不加载模型、不调用 `rknn_init()`、不执行推理。
+### 实验五：图像有效性
 
-Runtime Probe 必须：
+至少一张帧必须能够被正确查看，并确认：
 
-1. 使用 `<dlfcn.h>`；
-2. 默认加载 `librknnrt.so`；
-3. 支持命令行指定库路径；
-4. 清楚打印 `dlopen()` 错误；
-5. 用 `dlsym()` 检查：
+* 不是全黑；
+* 不是固定噪声；
+* 宽高正确；
+* 像素格式解释正确；
+* 图像内容随场景变化。
 
-   * `rknn_init`
-   * `rknn_destroy`
-   * `rknn_query`
-   * `rknn_run`
-6. 每个符号打印 FOUND 或 MISSING；
-7. 返回码区分成功和失败；
-8. 不加载模型；
-9. 不调用 RKNN API；
-10. 链接 `-ldl`。
+### 实验六：短时性能
 
-## 12.4 原始证据
+建议采集：
 
-所有关键文件和二进制记录 SHA-256：
+* 300 帧或至少 30 秒；
+* 实测 fps；
+* sequence gap；
+* timestamp delta；
+* timeout/error。
 
-* 固件镜像；
-* 厂商 SDK 压缩包；
-* 工具链压缩包；
-* `librknnrt.so`；
-* `rknn_server`；
-* hello 测试程序；
-* Runtime Probe；
-* 重要原始日志。
+### 实验七：稳定性
 
-`strings` 输出只能作为弱证据，不能把任意字符串直接认定为正式版本号。
+建议初始标准：
 
-# 十三、V1 常见问题排查顺序
+* 连续采集至少 10 分钟；
+* 程序不崩溃；
+* 不发生不可恢复的 DQBUF 错误；
+* timestamp 不回退；
+* 实测 fps 与设备实际能力相符；
+* 掉帧数量有明确统计；
+* 不因保存文件导致采集线程长期阻塞。
 
-遇到程序不能运行、库不能加载或 NPU 状态异常时，严格按照以下顺序：
+验收阈值不能脱离硬件能力随意制定。
+
+如果目标配置为 90 fps，可以暂定“平均实测 fps 不低于 80 fps”作为工程初始目标，但必须结合设备实际报告能力和 USB/ISP 条件修订。
+
+## 10. 常见坑和排查顺序
+
+至少覆盖：
+
+1. 默认认为 `/dev/video0` 是摄像头；
+2. 同一摄像头暴露多个 node；
+3. 选中 metadata node；
+4. 选中编码器/解码器 node；
+5. `capabilities` 与 `device_caps` 使用错误；
+6. single-planar 与 multi-planar 混淆；
+7. 没检查 `V4L2_CAP_STREAMING`；
+8. 没有在 `S_FMT` 后重新 `G_FMT`；
+9. 请求的分辨率被驱动调整；
+10. 请求的 fps 不生效；
+11. MJPG fourcc 写错；
+12. YUYV 与 YVYU/UYVY 混淆；
+13. stride/bytesperline 被忽略；
+14. `sizeimage` 被忽略；
+15. `bytesused` 被忽略；
+16. buffer 未全部 QBUF；
+17. STREAMON 类型错误；
+18. poll timeout；
+19. DQBUF 返回 EAGAIN；
+20. DQBUF 返回 EIO；
+21. buffer 未及时重新 QBUF；
+22. 保存帧阻塞采集；
+23. 没有处理 SIGINT 清理；
+24. 摄像头被其他进程占用；
+25. 权限或 video group 问题；
+26. USB 2.0 带宽不足；
+27. USB hub 共享带宽；
+28. USB 供电不足；
+29. 拔插后节点变化；
+30. MJPG 文件直接拼接却按单张 JPEG 查看；
+31. 原始 YUYV 文件没有正确指定尺寸；
+32. timestamp clock type 未检查；
+33. timestamp source 未检查；
+34. 混用 `CLOCK_REALTIME` 和 `CLOCK_MONOTONIC`；
+35. 用 DQBUF 时间冒充曝光时间；
+36. 只打印 fps，不检查 sequence gap；
+37. 只用 OpenCV VideoCapture；
+38. 一开始就做 DMABUF/RGA；
+39. V2 还没稳定就接 RKNN；
+40. V2 还没完成就同时调 ALSA。
+
+排查顺序必须是：
 
 ```text
-开发板商品型号与 PCB 版本
-→ Device Tree model/compatible
-→ 实际 SoC
-→ 启动介质与固件版本
-→ Kernel 架构
-→ RootFS 和用户空间位数
-→ libc 类型和版本
-→ 编译器 target triple
-→ sysroot
-→ ELF class 和 Machine
-→ ELF interpreter
-→ 动态依赖
-→ 文件权限
-→ 部署路径
-→ Runtime 文件来源
-→ Runtime ELF 架构
-→ Runtime 动态依赖
-→ RKNPU 驱动状态
-→ Runtime/驱动/rknn_server 版本关系
+物理连接和供电
+→ Kernel/driver binding
+→ 设备节点归属
+→ QUERYCAP
+→ capture/streaming capability
+→ single/multi-planar
+→ format/resolution/frame interval
+→ 权限和设备占用
+→ v4l2-ctl 单帧测试
+→ REQBUFS
+→ QUERYBUF/mmap
+→ QBUF
+→ STREAMON
+→ poll
+→ DQBUF
+→ bytesused/stride
+→ timestamp/sequence
+→ USB 或 ISP 带宽
+→ 应用性能
 ```
 
-不要跳过前面的身份和 ABI 检查，直接替换 Runtime 或重刷系统。
+不得一遇到失败就建议重刷系统或更换摄像头。
 
-# 十四、V1 最终验收输出
+## 11. 阶段完成前自查清单
 
-完成全部步骤后，生成：
+提供可复制的 Markdown checklist，至少包含：
+
+### 设备身份
+
+* [ ] Camera 厂商和型号已记录
+* [ ] 接口类型已记录
+* [ ] 驱动已确认
+* [ ] 所有 `/dev/videoX` 已盘点
+* [ ] 目标 capture node 已确认
+* [ ] 节点选择依据已记录
+* [ ] 稳定路径或重新识别方式已记录
+
+### V4L2 能力
+
+* [ ] QUERYCAP 已保存
+* [ ] capture capability 已确认
+* [ ] streaming capability 已确认
+* [ ] single/multi-planar 已确认
+* [ ] pixel formats 已保存
+* [ ] resolutions 已保存
+* [ ] frame intervals 已保存
+* [ ] controls 已保存
+
+### mmap 程序
+
+* [ ] REQBUFS 成功
+* [ ] QUERYBUF 成功
+* [ ] mmap 成功
+* [ ] 初始 QBUF 成功
+* [ ] STREAMON 成功
+* [ ] poll 正常
+* [ ] DQBUF 正常
+* [ ] buffer 重新 QBUF 正常
+* [ ] STREAMOFF 正常
+* [ ] munmap/close 正常
+* [ ] Ctrl+C 可安全退出
+
+### 帧与元数据
+
+* [ ] 至少一张有效帧
+* [ ] width/height 正确
+* [ ] pixel format 正确
+* [ ] bytesperline 已记录
+* [ ] sizeimage 已记录
+* [ ] bytesused 已记录
+* [ ] sequence 已记录
+* [ ] V4L2 timestamp 已记录
+* [ ] timestamp type 已记录
+* [ ] timestamp source 已记录
+* [ ] DQBUF monotonic timestamp 已记录
+* [ ] timestamp 单调性已检查
+
+### 性能与稳定性
+
+* [ ] 短时测试已完成
+* [ ] 10 分钟稳定测试已完成
+* [ ] fps 已统计
+* [ ] sequence gap 已统计
+* [ ] 掉帧估计已统计
+* [ ] poll timeout 已统计
+* [ ] DQBUF error 已统计
+* [ ] CPU 占用已记录
+* [ ] 内存占用已记录
+
+### 产品阶段
+
+* [ ] 没有使用 OpenCV VideoCapture 替代 mmap
+* [ ] 没有提前运行 RKNN
+* [ ] 没有提前做音频
+* [ ] 没有提前做音视频同步
+* [ ] 没有把测试帧写盘当作 SD 录像功能
+* [ ] V2 文档已完成
+* [ ] README 已更新
+* [ ] Git 已提交
+
+## 12. 延期时的降级方案
+
+P0 不能砍：
+
+1. 正确识别目标 video node；
+2. `v4l2-ctl --all`；
+3. `v4l2-ctl --list-formats-ext`；
+4. 明确 pixel format、分辨率、fps；
+5. 自研 V4L2 mmap 程序；
+6. 至少一张有效帧；
+7. fps；
+8. sequence；
+9. timestamp；
+10. 连续稳定采集；
+11. 测试报告；
+12. Git 提交。
+
+可以降级：
+
+1. 只测试一种 MVP 格式；
+2. 只支持 single-planar，但前提是设备确实支持；
+3. 只保存第一帧；
+4. 稳定性测试先做 5 分钟，但必须在报告中标记未达到建议时长；
+5. 暂不做 `v4l2-compliance`；
+6. 暂不做复杂 controls；
+7. 暂不做多线程；
+8. 暂不做帧队列；
+9. 暂不做 DMABUF；
+10. 暂不做 RGA；
+11. 暂不做音频和存储。
+
+不能以 OpenCV 程序能显示画面替代 V2 验收。
+
+
+
+V2 → V2A 准入条件：
+
+* [ ] Camera 节点正确；
+* [ ] V4L2 mmap 稳定；
+* [ ] frame sequence 可用；
+* [ ] timestamp 已记录；
+* [ ] timestamp clock/source 已确认或明确标记 UNKNOWN；
+* [ ] 连续采集稳定；
+* [ ] V2 报告完成；
+* [ ] Git 已提交。
+
+V2 → V3 准入条件：
+
+* [ ] V2 的全部 P0 项完成；
+* [ ] 已确定提供给预处理模块的像素格式；
+* [ ] 已确定 width、height、stride 和 bytesused；
+* [ ] Camera 模块能够输出稳定帧；
+* [ ] 不需要依赖显示窗口才能采集；
+* [ ] 采集线程或主循环不存在持续阻塞；
+* [ ] 已有基本 fps 和掉帧基线。
+
+建议实际顺序：
 
 ```text
-V1-Core：PASS / WARN / FAIL / BLOCKED
-V1-NPU-Ready：PASS / WARN / FAIL / BLOCKED
+V2 Camera/V4L2
+→ V2A Audio/ALSA
+→ V3 RKNN
 ```
 
-`docs/v1_env/v1_acceptance.md` 至少包含：
+# 十一、后续协作方式
 
-| 验收项 | 状态 | 原始证据 | 结论 | 是否阻塞 V2 | 是否阻塞 V3 |
-| --- | -- | ---- | -- | ------- | ------- |
+后续每轮遵守：
 
-V1-Core 进入 V2 的最低条件：
+1. 先做只读盘点，再修改配置；
+2. 每次给一组有明确目的的命令；
+3. 明确命令运行位置；
+4. 我提供输出后再判断；
+5. 每项结果标记 PASS、WARN、FAIL 或 BLOCKED；
+6. 不猜 `/dev/videoX`；
+7. 不猜 pixel format；
+8. 不猜分辨率或 fps；
+9. 不猜 single/multi-planar；
+10. 不猜 timestamp clock；
+11. 每个判断引用我输出中的实际证据；
+12. 原始日志和分析报告分开；
+13. 修改系统前说明备份和回滚；
+14. 不让我提前做 RKNN；
+15. 不让我提前做 ALSA；
+16. 不让我提前做音视频同步；
+17. 不让我提前做 SD 卡录像；
+18. 不允许只用 OpenCV；
+19. 发现目标过大时主动砍范围；
+20. V2 完成后生成最终验收报告和 Git commit 建议。
 
-```text
-[ ] 开发板能够稳定上电
-[ ] 至少一种登录方式稳定
-[ ] 厂商和具体板卡身份已记录或有明确 UNKNOWN
-[ ] SoC 已通过实机证据确认
-[ ] Kernel、RootFS 和 Device Tree 已记录
-[ ] 内核与用户空间架构已确认
-[ ] libc/ABI 已确认
-[ ] 8GB RAM 和 64GB eMMC 已实测核验
-[ ] 分区、挂载和可用空间已记录
-[ ] 网络状态已记录
-[ ] 关键设备节点已记录
-[ ] 启动日志或明确标记的替代日志已保存
-[ ] 本地或交叉编译至少一条链路成功
-[ ] C 或 C++ 程序在 RK3588 实际运行
-[ ] ELF 架构、interpreter 和动态依赖验证通过
-[ ] 原始日志已保存
-[ ] V1 文档已完成
-[ ] README 的 V1 环境章节已更新
-[ ] Git 已提交
-```
+现在开始帮助我完成 V2。
 
-V1-NPU-Ready 进入 V3 的最低条件：
+第一轮请严格按上述 13 部分输出完整实施方案、目录、Markdown 模板、命令、信息收集脚本、V4L2 mmap C++ 程序设计、最小验证实验、排查顺序和验收标准。
 
-```text
-[ ] RKNPU 驱动状态有证据
-[ ] RKNPU 内核日志已保存
-[ ] Runtime 文件路径已确认
-[ ] Runtime ELF 架构正确
-[ ] Runtime 来源已记录
-[ ] Runtime 版本已确认，或 UNKNOWN + SHA-256 已记录
-[ ] Runtime 动态依赖能够解析
-[ ] rknn_server 状态已记录
-[ ] Runtime dlopen 测试已完成
-[ ] 核心 RKNN API 符号已检查
-[ ] 没有通过加载模型来替代环境验证
-```
+第一轮不得假设我的摄像头型号、设备节点、驱动、USB VID:PID、分辨率、帧率、pixel format 或 buffer 类型。
 
-最终规则：
+最终必须明确：
 
-只有 V1-Core 达到 PASS，才允许进入 V2 Camera/V4L2 采集阶段。
-
-V1-NPU-Ready 可以与 V2 并行补齐，但必须在进入 V3 足球分割模型迁移与 RKNN 推理前达到 PASS。
-
-V2 只验证 Camera/V4L2 设备、格式、buffer、mmap streaming I/O、fps、时间戳和丢帧，不进行足球识别。
-
-现在开始 V1。
-
-第一轮严格只执行“项目基线确认、V1 双门禁说明、目录创建和只读环境采集脚本”，不要提前输出后续所有模板和代码，也不要建议安装或升级任何软件。
+只有在正确设备识别、V4L2 能力盘点、mmap 采集、有效帧验证、fps、sequence、timestamp、稳定性报告、文档和 Git 提交均达到 V2 验收标准后，才允许进入 V2A Audio/ALSA 或 V3 RKNN 阶段。

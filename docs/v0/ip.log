@@ -1,3 +1,8 @@
+ens33网卡掉线
+sudo ip link set ens33 up
+sudo dhclient ens33
+
+
 Note Book ip:192.168.50.1/24
 开发板ip:192.168.50.2/24
 Note Book
@@ -14,3 +19,16 @@ ping -c 4 192.168.50.2
 mount -t nfs -o vers=3,nolock,proto=tcp \
     192.168.50.1:/home/liu/linux/nfs \
     /mnt/nfs
+
+mount -v -t nfs \
+  -o vers=3,nolock,proto=tcp,timeo=5,retrans=2 \
+  192.168.50.1:/home/liu2004/nfs_dir \
+  /mnt/nfs
+
+sudo ip addr flush dev ens34
+sudo ip link set ens34 up
+sudo ip addr add 192.168.50.1/24 dev ens34
+
+conda activate python3.8-tk2-2.0
+conda deactivate
+conda create --name python3.8-tk2-2.0 python=3.8
