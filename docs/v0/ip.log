@@ -32,3 +32,5 @@ sudo ip addr add 192.168.50.1/24 dev ens34
 conda activate python3.8-tk2-2.0
 conda deactivate
 conda create --name python3.8-tk2-2.0 python=3.8
+
+ cp -a VisionArm/build/v2_camera-rk3588/v4l2_capture /home/liu2004/nfs_dir/
