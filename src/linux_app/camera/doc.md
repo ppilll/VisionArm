@@ -3,15 +3,15 @@
 source /opt/atk-dlrk3588-toolchain/environment-setup
 /usr/bin/cmake \
   -S src/linux_app/camera \
-  -B build/v2_camera-rk3588 \
+  -B build/v2_camera \
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_TOOLCHAIN_FILE="$(pwd)/cmake/rk3588-toolchain.cmake"
 
 /usr/bin/cmake \
-  --build build/v2_camera-rk3588 \
+  --build build/v2_camera \
   --verbose
-rm -rf build/v2_camera-rk3588
-cp -a build/v2_camera-rk3588/v4l2_capture /home/liu2004/nfs_dir/
+rm -rf build/v2_camera
+cp -a build/v2_camera/v4l2_camera_capture /home/liu2004/nfs_dir/
 
 ./v4l2_capturea \
   --device <VIDEO_DEVICE> \

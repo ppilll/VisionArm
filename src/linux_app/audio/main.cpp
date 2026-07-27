@@ -151,7 +151,7 @@ AudioCaptureConfig parseArguments(int argc,char** argv) {
             channels_set = true;
 
         } else if (option == "--format") {
-            config.format =equireValue(option);
+            config.format =requireValue(option);
             format_set = true;
 
         } else if (

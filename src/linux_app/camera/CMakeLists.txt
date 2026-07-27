@@ -7,7 +7,7 @@ project(
 )
 
 add_executable(
-    v4l2_capture
+    v4l2_camera_capture
     main.cpp
     v4l2_capture.cpp
 )
