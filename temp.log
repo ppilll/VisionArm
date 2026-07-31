@@ -251,59 +251,75 @@ YOLOv8 task:
 detect
 
 RKNN output tensor structure:
-待从 V3 tensor contract 获取
+  9 个 INT8 affine raw feature maps
+  3 个检测分支
+  每个分支 3 个输出：
+    box DFL tensor
+    per-class confidence tensor
+    confidence-sum tensor
 
 Model input width/height:
-[960,960,3]
+  width: 960
+  height: 960
+  channels: 3
+  batch: 1
+  tensor shape: [1, 960, 960, 3]
+  layout: NHWC
 
 Preprocess:
-resize / letterbox / crop
+  aspect-ratio-preserving letterbox
+  crop: no
+  original image: 4128 × 1908
+  resized image: approximately 960 × 444
+  pad_x: 0
+  pad_y: 258
+  scale: 0.232558
+  padding placement: centered vertically
+  padding color: RGB(114,114,114)
 
 Input color:
 RGB
 
+Class count:
+  2
+
+Class names:
+  0: "1"
+  1: "ball"
+
+ball target class:
+  name: "ball"
+  class_id: 1
+
+Application input:
+  UINT8
+  NHWC
+  range: 0..255
+
+Model input tensor:
+  INT8 affine
+  zero point: -128
+  scale: 0.00392157
+
 Quantization:
-INT8
+  INT8 affine
 
-class_count: 1
-class_id=0, name=ping_pong_ball
+RKNN output coordinate format:
+  raw YOLOv8 feature maps
+  不是 xywh
+  不是直接 xyxy
 
-Output coordinate format:
-xywh / xyxy / raw feature maps
+Postprocess output format:
+  应定义为 xyxy + confidence + class_id
+  坐标应还原到原始摄像头画面
 
 NMS:
-模型内 / CPU 后处理 / 已包含于 V3 demo
+  不在 RKNN 模型内
+  当前 V3 程序也没有执行
+  下一阶段由 CPU 后处理执行
 ```
 
-# 四、首先必须确认模型任务类型
-
-虽然项目最初描述过“足球分割模型”，当前实际程序使用 YOLOv8，并计划从：
-
-```text
-x1, y1, x2, y2
-```
-
-计算中心点。
-
-第一步必须根据模型文件和 V3 tensor contract 确认：
-
-V4 文档和代码应使用：
-
-```text
-Object Detection
-Bounding Box
-Box Center
-```
-
-不要继续声称使用 segmentation mask。
-
-V4 阶段名称可以调整为：
-
-```text
-足球目标后处理、目标偏差与实时感知流水线
-```
-
-# 五、对 V4 工作量的正确理解
+# 四、对 V4 工作量的正确理解
 
 球心基础公式确实简单：
 
@@ -338,7 +354,7 @@ Raw RKNN Output
 → Real-time Pipeline
 ```
 
-# 六、V4 一句话目标
+# 五、V4 一句话目标
 
 V4 的目标是：
 
@@ -371,7 +387,7 @@ Audio Capture Thread
 
 但不做 A/V mux。
 
-# 七、V4 不是物理闭环
+# 六、V4 不是物理闭环
 
 V4 可以形成：
 
@@ -415,36 +431,34 @@ Error
 * V6：执行器动作；
 * V7：真实闭环联调和控制优化。
 
-# 八、V4 严格边界
+# 七、V4 严格边界
 
 V4 做：
 
-1. 检查真实 YOLOv8 输出结构；
-2. detection/segmentation 任务确认；
-3. raw output decode；
-4. dequantization；
-5. confidence threshold；
-6. class filtering；
-7. NMS；
-8. coordinate transform；
-9. de-letterbox；
-10. bounding-box validation；
-11. football target selection；
-12. box center 或 mask centroid；
-13. dx/dy；
-14. normalized error；
-15. target state；
-16. lost target；
-17. result stale detection；
-18. timestamp propagation；
-19. offline unit tests；
-20. Camera + RKNN + Postprocess 实时整合；
-21. bounded queues；
-22. frame-drop policy；
-23. graceful shutdown；
-24. pipeline metrics；
-25. Mock Control Sink；
-26. P1 Audio thread coexistence。
+1. raw output decode；
+2. dequantization；
+3. confidence threshold；
+4. class filtering；
+5. NMS；
+6. coordinate transform；
+7. de-letterbox；
+8. bounding-box validation；
+9. football target selection；
+10. box center 或 mask centroid；
+11. dx/dy；
+12. normalized error；
+13. target state；
+14. lost target；
+15. result stale detection；
+16. timestamp propagation；
+17. offline unit tests；
+18. Camera + RKNN + Postprocess 实时整合；
+19. bounded queues；
+20. frame-drop policy；
+21. graceful shutdown；
+22. pipeline metrics；
+23. Mock Control Sink；
+24. P1 Audio thread coexistence。
 
 V4 不做：
 
@@ -469,7 +483,7 @@ V4 不做：
 19. 不做复杂线程优先级调度；
 20. 不删除 V2、V2A、V3 独立测试程序。
 
-# 九、为什么现在可以开始多线程整合
+# 八、为什么现在可以开始多线程整合
 
 目前每个阶段的独立程序必须继续保留：
 
@@ -520,7 +534,7 @@ Integration:
 visionarm_pipeline_test
 ```
 
-# 十、V4 多线程架构
+# 九、V4 多线程架构
 
 P0 推荐架构：
 
@@ -578,7 +592,7 @@ P1 可加入：
 
 Audio 在 V4 不进入视频推理队列。
 
-# 十一、队列和实时性原则
+# 十、队列和实时性原则
 
 V4 必须使用有界队列。
 
@@ -634,7 +648,7 @@ stale_results
 queue_high_watermark
 ```
 
-# 十二、V4L2 mmap buffer 生命周期
+# 十一、V4L2 mmap buffer 生命周期
 
 这是多线程整合中的重要风险。
 
@@ -711,7 +725,7 @@ Camera frame
 
 V4 必须在 `threading_queue_design.md` 中明确实际选择。
 
-# 十三、V4 数据契约
+# 十二、V4 数据契约
 
 必须定义以下数据结构。
 
@@ -922,11 +936,10 @@ y 向下为正
 
 电机方向映射在 V5/V6 确认。
 
-# 十四、YOLOv8 后处理要求
+# 十三、YOLOv8 后处理要求
 
 不能直接假设 V3 已经返回最终 xyxy。
 
-必须检查现有代码。
 
 后处理可能包含：
 
@@ -974,7 +987,7 @@ football_class_id
 
 不得散落为 magic number。
 
-# 十五、坐标反变换
+# 十四、坐标反变换
 
 如果模型输入使用直接 stretch resize：
 
@@ -1010,7 +1023,7 @@ clip y to [0, source_height - 1]
 * x2 < x1；
 * y2 < y1。
 
-# 十六、多足球目标选择
+# 十五、多足球目标选择
 
 第一版至少需要确定唯一目标。
 
@@ -1042,7 +1055,7 @@ score =
 5. 当前目标突然消失；
 6. 新目标突然出现。
 
-# 十七、丢球和状态机
+# 十六、丢球和状态机
 
 V4 至少实现：
 
@@ -1076,7 +1089,7 @@ V4 不做主动搜索云台策略。
 
 LOST 时只输出状态，不输出随机电机命令。
 
-# 十八、旧帧和结果年龄
+# 十七、旧帧和结果年龄
 
 必须计算：
 
@@ -1107,7 +1120,7 @@ STALE 结果不能继续作为后续云台控制输入。
 * inference result stale；
 * target lost。
 
-# 十九、滤波与控制边界
+# 十八、滤波与控制边界
 
 V4 可以输出：
 
@@ -1135,93 +1148,7 @@ Raw Target Error
 
 正式控制策略和云台参数在 V7 调试。
 
-# 二十、V4 必须产出的交付物
-
-推荐目录：
-
-```text
-VisionArm-BallTrack/
-├── README.md
-│
-├── docs/
-│   └── v4_postprocess_pipeline/
-│       ├── README.md
-│       ├── model_task_decision.md
-│       ├── postprocess_contract.md
-│       ├── coordinate_contract.md
-│       ├── target_selection.md
-│       ├── target_state_machine.md
-│       ├── pipeline_architecture.md
-│       ├── threading_queue_design.md
-│       ├── performance_report.md
-│       ├── troubleshooting.md
-│       └── v4_acceptance.md
-│
-├── src/
-│   └── linux_app/
-│       ├── common/
-│       │   ├── bounded_latest_queue.h
-│       │   ├── time_utils.h
-│       │   └── pipeline_types.h
-│       │
-│       ├── postprocess/
-│       │   ├── CMakeLists.txt
-│       │   ├── yolo_postprocessor.h
-│       │   ├── yolo_postprocessor.cpp
-│       │   ├── coordinate_mapper.h
-│       │   ├── coordinate_mapper.cpp
-│       │   ├── target_selector.h
-│       │   ├── target_selector.cpp
-│       │   ├── target_state_machine.h
-│       │   ├── target_state_machine.cpp
-│       │   ├── error_calculator.h
-│       │   └── error_calculator.cpp
-│       │
-│       └── pipeline/
-│           ├── CMakeLists.txt
-│           ├── vision_pipeline.h
-│           ├── vision_pipeline.cpp
-│           ├── pipeline_stats.h
-│           ├── pipeline_stats.cpp
-│           ├── mock_control_sink.h
-│           ├── mock_control_sink.cpp
-│           └── main.cpp
-│
-├── tests/
-│   └── v4/
-│       ├── test_coordinate_mapper.cpp
-│       ├── test_target_selector.cpp
-│       ├── test_state_machine.cpp
-│       ├── test_error_calculator.cpp
-│       └── fixtures/
-│
-├── configs/
-│   └── v4_pipeline.conf
-│
-├── build/
-│   └── v4/
-│
-├── tools/
-│   └── v4/
-│       ├── analyze_pipeline_csv.py
-│       ├── visualize_target_csv.py
-│       └── run_stability_test.sh
-│
-├── logs/
-│   └── v4/
-│       ├── offline_tests.log
-│       ├── integration.log
-│       ├── pipeline_frames.csv
-│       ├── target_results.csv
-│       └── stability_test.log
-│
-└── reports/
-    └── v4/
-        ├── annotated_samples/
-        └── charts/
-```
-
-# 二十一、P0 / P1 / P2
+# 十九、P0 / P1 / P2
 
 ## P0 必须完成
 
@@ -1287,7 +1214,7 @@ VisionArm-BallTrack/
 12. UART；
 13. 编码和 mux。
 
-# 二十二、你第一次回复必须严格输出以下 13 部分
+# 二十、你第一次回复必须严格输出以下 13 部分
 
 ## 1. V4 一句话目标
 
@@ -1327,174 +1254,8 @@ VisionArm-BallTrack/
 
 不要删除 V2、V2A、V3 独立测试程序。
 
-## 5. Markdown 文档模板
 
-直接给出以下文件的可复制模板：
-
-### model_task_decision.md
-
-包含：
-
-* 模型名称；
-* detect/segment；
-* 证据；
-* V3 outputs；
-* 当前采用 box center 还是 mask centroid；
-* 原因；
-* README 需要如何同步；
-* 决策。
-
-### postprocess_contract.md
-
-包含：
-
-* raw RKNN output；
-* tensor shape；
-* quantization；
-* decode；
-* confidence；
-* class；
-* NMS；
-* output detection；
-* football class；
-* thresholds；
-* assumptions。
-
-### coordinate_contract.md
-
-包含：
-
-* Camera coordinates；
-* model coordinates；
-* stretch/letterbox；
-* scale；
-* padding；
-* reverse transform；
-* clip；
-* center；
-* dx/dy；
-* normalized error；
-* sign convention；
-* unit tests。
-
-### target_selection.md
-
-包含：
-
-* zero target；
-* one target；
-* multiple targets；
-* confidence strategy；
-* continuity strategy；
-* invalid box；
-* target output。
-
-### target_state_machine.md
-
-包含：
-
-* state；
-* transitions；
-* acquire_hits；
-* lost_misses；
-* stale；
-* output behavior。
-
-### pipeline_architecture.md
-
-包含：
-
-* modules；
-* threads；
-* queues；
-* data flow；
-* timestamps；
-* control sink；
-* future V5 replacement；
-* Audio P1；
-* shutdown。
-
-### threading_queue_design.md
-
-包含：
-
-* queue type；
-* capacity；
-* drop policy；
-* why latest-frame-wins；
-* mmap ownership；
-* backpressure；
-* stop semantics；
-* exception handling；
-* metrics。
-
-### performance_report.md
-
-至少包含：
-
-* Camera config；
-* model；
-* input；
-* thread count；
-* queue capacity；
-* Camera fps；
-* inference fps；
-* postprocess fps；
-* control-result rate；
-* queue drops；
-* stale results；
-* capture-to-result min/mean/p50/p95/p99；
-* preprocess；
-* inference；
-* postprocess；
-* CPU；
-* memory；
-* NPU；
-* run duration；
-* errors；
-* conclusion。
-
-### troubleshooting.md
-
-至少包含：
-
-* wrong model type；
-* wrong output format；
-* wrong class id；
-* missing NMS；
-* duplicate boxes；
-* confidence wrong；
-* quantization scale/zp；
-* xywh/xyxy；
-* wrong letterbox reverse；
-* coordinate out of bounds；
-* multiple balls；
-* result flicker；
-* lost target；
-* stale result；
-* mmap pointer corruption；
-* queue growth；
-* deadlock；
-* thread exit；
-* high latency；
-* Camera faster than inference；
-* 4K copy cost；
-* Audio coexistence problem。
-
-### v4_acceptance.md
-
-状态只能是：
-
-```text
-PASS
-WARN
-FAIL
-BLOCKED
-```
-
-包含进入 V5 的条件。
-
-## 6. 技术链路图
+## 5. 技术链路图
 
 给出：
 
@@ -1504,37 +1265,36 @@ BLOCKED
 * V4→V5 ControlSink 替换图；
 * Audio P1 图。
 
-## 7. 具体执行步骤
+## 6. 具体执行步骤
 
 必须按以下顺序：
 
-### Step A：确认模型任务和现有 V3 输出
 
-### Step B：冻结 Postprocess Contract
+### Step A：冻结 Postprocess Contract
 
-### Step C：离线实现坐标和目标逻辑
+### Step B：离线实现坐标和目标逻辑
 
-### Step D：单元测试
+### Step C：单元测试
 
-### Step E：提取可复用模块
+### Step D：提取可复用模块
 
-### Step F：实现 BoundedLatestQueue
+### Step E：实现 BoundedLatestQueue
 
-### Step G：解决 V4L2 mmap ownership
+### Step F：解决 V4L2 mmap ownership
 
-### Step H：Camera + RKNN 多线程整合
+### Step G：Camera + RKNN 多线程整合
 
-### Step I：加入 Postprocess 和 MockControlSink
+### Step H：加入 Postprocess 和 MockControlSink
 
-### Step J：加入状态机和 stale 检测
+### Step I：加入状态机和 stale 检测
 
-### Step K：短时测试
+### Step J：短时测试
 
-### Step L：10 分钟稳定测试
+### Step K：10 分钟稳定测试
 
-### Step M：P1 Audio 共存
+### Step L：P1 Audio 共存
 
-### Step N：报告和 Git
+### Step M：报告和 Git
 
 每一步说明：
 
@@ -1820,80 +1580,7 @@ Model task
 → performance
 ```
 
-## 11. V4 完成前自查清单
-
-提供完整可复制 Markdown checklist。
-
-至少覆盖：
-
-* 模型任务；
-* 后处理；
-* 坐标；
-* target selection；
-* state；
-* stale；
-* data contracts；
-* mmap ownership；
-* bounded queue；
-* thread lifecycle；
-* Camera/RKNN integration；
-* Mock Control；
-* CSV；
-* 10 分钟稳定性；
-* Audio P1；
-* docs；
-* README；
-* Git。
-
-## 12. 延期时降级方案
-
-P0 不能砍：
-
-* detect/segment 真相；
-* output contract；
-* coordinate reverse；
-* football class；
-* confidence；
-* NMS 状态；
-* unique target；
-* center；
-* dx/dy；
-* normalized error；
-* lost；
-* stale；
-* Camera+RKNN+Postprocess；
-* bounded queue；
-* correct buffer ownership；
-* MockControlSink；
-* 10 分钟测试；
-* docs；
-* Git。
-
-可以降级：
-
-* Audio 暂不合入；
-* 只用最高置信度目标；
-* 暂不 EMA；
-* 暂不复杂状态机；
-* 只支持一个 Camera 配置；
-* 只保存少量 annotated frames；
-* 只测试 720p 或 1080p。
-
-可以延期：
-
-* 4K product mode；
-* tracking；
-* Kalman；
-* PID；
-* UART；
-* DMABUF；
-* RGA；
-* zero-copy；
-* Audio mux；
-* 网络；
-* SD recording。
-
-## 13. 面试可讲点和 V4→V5 准入条件
+## 11. 面试可讲点和 V4→V5 准入条件
 
 面试可讲：
 
@@ -1966,31 +1653,6 @@ MockControlSink
 ```
 
 而不应重新改写 Camera、Inference 或 Postprocess。
-
-# 二十三、协作要求
-
-后续每轮必须遵守：
-
-1. 先读取 V3 真实代码；
-2. 不猜模型是 detect 还是 segment；
-3. 不猜输出格式；
-4. 不猜 class id；
-5. 不猜 NMS 状态；
-6. 不猜 letterbox；
-7. 每项结果标记 PASS/WARN/FAIL/BLOCKED；
-8. 先离线单元测试，再实时整合；
-9. 先正确性，再性能；
-10. 不将 mmap 裸指针跨线程错误使用；
-11. 不使用无界队列；
-12. 不为了“每帧都处理”制造高延迟；
-13. 不删除阶段测试工具；
-14. 不提前写 UART；
-15. 不提前控制云台；
-16. 不提前做 mux；
-17. 命令注明 PC 或 RK3588；
-18. 原始日志和分析报告分开；
-19. V4 最后必须生成验收报告和 Git commit 建议；
-20. 发现设计过大时主动砍 P1/P2，不砍 P0。
 
 现在开始帮助我完成 V4。
 
