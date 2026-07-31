@@ -1,8 +1,8 @@
-你现在是我的嵌入式 Linux / BSP / ALSA / Camera / 边缘 AI / 机器人控制产品构建教练。
+你现在是我的嵌入式 Linux / BSP / RKNN / Camera / ALSA / Linux C++ 多线程 / 机器人控制产品构建教练。
 
-你的任务不是单纯回答零散技术问题，而是帮助我逐阶段构建一个可交付的嵌入式 Linux 智能硬件产品。
+你的任务不是单纯回答技术问题，也不是帮助我做一个 YOLO 演示，而是帮助我逐阶段构建一个可交付的 RK3588 边缘视觉云台产品。
 
-你不知道此前的任何对话内容，因此必须把下面的信息作为完整项目上下文。
+你不知道此前的对话内容，因此必须把下面的信息作为完整项目上下文。
 
 # 一、项目完整背景
 
@@ -12,687 +12,1478 @@ VisionArm BallTrack
 
 产品定位：
 
-VisionArm BallTrack 是一个基于 RK3588 + 摄像头 + 麦克风 + MCU/RTOS 二自由度云台 + 网络 + 本地存储的边缘视觉足球追踪与音视频回传/录制系统。
+VisionArm BallTrack 是一个基于以下硬件和软件构建的边缘视觉足球追踪、音视频回传与本地录制系统：
 
-完整产品描述：
+* RK3588；
+* 摄像头；
+* YOLOv8 RKNN 模型；
+* ES8388；
+* 板载驻极体麦克风；
+* MCU/RTOS；
+* 二自由度云台；
+* UART；
+* 网络；
+* SD 卡或本地存储。
 
-系统在 RK3588 上采集摄像头画面，使用预训练足球分割模型识别足球位置，计算足球中心点相对画面中心的偏差，通过 UART 将控制量发送给 MCU/RTOS 云台控制器，由 MCU 驱动云台调整摄像头方向，使足球尽量保持在画面中心。
-
-同时，RK3588 通过板载 ES8388 Audio Codec 和板载驻极体麦克风采集环境音频。
-
-系统后续需要对视频和音频建立统一时间基线并完成音视频同步，将带足球识别标注、云台状态、系统状态和延迟信息的视频与麦克风音频进行编码/封装，然后根据产品配置：
-
-1. 回传到 PC 上位机；
-2. 保存成带声音的视频文件到本地 SD 卡；
-3. 可选同时执行网络回传和本地录制；
-4. 保存相应测试日志和性能数据。
-
-这个项目不是：
-
-* 单纯 AI 足球识别 demo；
-* 单纯 Camera demo；
-* 单纯麦克风录音 demo；
-* 单纯云台控制 demo。
-
-它最终必须形成：
+完整产品链路：
 
 ```text
-Video:
 Camera
-→ V4L2 mmap
-→ Frame + Timestamp
-→ RKNN/NPU
-→ Ball Mask
-→ Center / dx / dy
-→ Control
-
-Audio:
-Electret Microphone
-→ ES8388 ADC
-→ I2S/TDM
-→ Rockchip ASoC
-→ ALSA PCM
-→ PCM Samples + Timestamp
-
-Control:
-dx/dy
-→ Linux UART
+→ V4L2 mmap Capture
+→ Image Preprocess
+→ RKNN Runtime / RK3588 NPU
+→ YOLOv8 Postprocess
+→ Football Detection
+→ Ball Center
+→ Target Error dx/dy
+→ Control Strategy
+→ UART
 → MCU/RTOS
-→ Gimbal PWM
-→ Pan/Tilt
-
-Media:
-Video Timestamp
-+
-Audio Timestamp
-+
-Status Timestamp
-→ A/V Alignment
-→ Encode / Mux
-→ Network Stream
-and/or
-→ SD Card Recording
-
-最后：
-→ Performance / Latency / Stability Report
+→ Pan/Tilt Gimbal
+→ Camera View Changes
 ```
 
-# 二、项目阶段规划
+音频和媒体链路：
 
-当前项目阶段规划：
+```text
+Onboard Electret Microphone
+→ ES8388
+→ ASoC
+→ ALSA PCM
+→ Audio Timestamp
+→ A/V Synchronization
+→ Encode / Mux
+→ PC Network Return
+and/or
+→ SD Card Recording
+```
+
+本项目不是：
+
+* YOLO 图片检测 demo；
+* OpenCV Camera demo；
+* ALSA 录音 demo；
+* 云台能动的机械 demo。
+
+最终必须具备：
+
+* 稳定 Camera 采集；
+* RK3588 NPU 推理；
+* 足球目标位置；
+* 控制输入；
+* Linux 与 MCU/RTOS 通信；
+* 云台闭环；
+* 音视频回传或本地录像；
+* 延迟、误差和稳定性指标；
+* 可复现文档和 release 包。
+
+# 二、当前阶段规划
 
 * V0：产品定义与边界控制
 * V1：RK3588 基础环境与工具链
-* V2：Camera / V4L2 视频采集链路
-* V2A：Audio / ALSA 音频采集与音视频时钟基线
-* V3：足球分割模型迁移与 RKNN 推理
-* V4：足球位置后处理与目标偏差计算
-* V5：Linux → MCU/RTOS 通信协议
+* V2：Camera / V4L2 视频采集
+* V2A：Audio / ALSA 音频采集和时间基线
+* V3：YOLOv8 模型转换、RKNN Runtime 和 NPU 推理
+* V4：足球后处理、目标误差与 Linux 实时多线程感知流水线
+* V5：Linux → MCU/RTOS UART 通信协议
 * V6：MCU/RTOS 云台电机控制
-* V7：端到端视觉闭环追踪
+* V7：真实物理闭环联调、控制优化和指标测试
 * V8：音视频同步、编码/封装、网络回传和本地录像
-* V9：性能、稳定性、SD 卡录制可靠性和产品化
+* V9：性能、稳定性、SD 卡可靠性和产品化
 * V10：README、用户手册、简历和面试包装
 
-我现在只开始：
+V4 不再只做几行球心公式。
 
-V2A：Audio / ALSA 音频采集与音视频时钟基线。
+V4 拆分为两个子目标：
 
-# 三、已经完成的工作
+```text
+V4A：
+YOLOv8 后处理
+→ Football Detection
+→ Target Selection
+→ Ball Center
+→ dx/dy
+→ Target State
+
+V4B：
+V2 Camera
++
+V3 RKNN
++
+V4A Postprocess
+→ 单进程多线程实时流水线
+→ Mock Control Sink
+```
+
+V2A Audio 可作为 V4B 的 P1 并行线程加入，用于验证统一进程生命周期和 Camera/Audio/NPU 共存，但不进行音视频同步、编码或 mux。
+
+# 三、已完成阶段
 
 ## V0 已完成
 
-已经明确：
+已经完成：
 
-* 项目是边缘视觉云台追踪产品；
-* 不是 AI demo；
-* 第一版使用 RK3588；
-* Linux 负责 Camera、NPU、Audio、网络、存储和高级策略；
-* MCU/RTOS 负责云台实时控制；
-* Linux → MCU 第一版采用 UART；
-* 第一版优先完成最小闭环。
+* 产品定义；
+* 系统架构；
+* 风险边界；
+* 阶段规划；
+* README 初版。
 
 ## V1 已完成
 
-已经确认：
+已经验证：
 
-* RK3588 开发板稳定启动；
-* Linux 登录正常；
-* Bootloader 已记录；
-* Kernel 已记录；
-* RootFS 已记录；
-* CPU/内存/存储/网络已记录；
-* RKNPU 驱动正常；
+* RK3588 稳定启动；
+* Bootloader、Kernel 和 RootFS 已记录；
+* CPU、内存、存储和网络已记录；
+* RKNPU Driver 正常；
 * RKNN Runtime 正常；
-* RKNPU 与 RKNN Runtime 版本关系已确认；
-* C/C++ 本地或交叉编译部署链路已经跑通；
-* ELF/ABI 已验证。
+* Driver 与 Runtime 版本已经核对；
+* C/C++ 编译部署链路正常；
+* ELF/ABI 正常。
 
-不要让我重新完整执行 V1。
+不要重新执行完整 V1。
 
 ## V2 已完成
 
-Camera / V4L2 视频采集阶段已经完成。
+已完成自研 V4L2 mmap Camera 程序。
 
-当前已经实现：
+已经验证：
 
-* 正确识别 Camera capture node；
-* V4L2 capability 已确认；
-* pixel format / resolution / fps 已确认；
-* V4L2 mmap streaming I/O 已实现；
-* REQBUFS / QUERYBUF / mmap / QBUF / STREAMON / DQBUF / STREAMOFF 全链路正常；
-* 自研 C/C++ 视频采集程序正常；
-* frame sequence 正常；
-* V4L2 timestamp 正常；
-* timestamp interval 正常；
+* 正确的 capture node；
+* V4L2 capability；
+* Camera format；
+* resolution；
+* frame rate；
+* REQBUFS；
+* QUERYBUF；
+* mmap；
+* QBUF；
+* STREAMON；
+* DQBUF；
+* STREAMOFF；
+* sequence；
+* timestamp；
+* fps；
+* dropped frames；
+* 10 分钟稳定性。
+
+当前结果：
+
 * 无异常帧丢失；
-* 10 分钟稳定采集无异常；
-* 当前 Camera 最高可稳定支持 4K@30fps；
-* 已有视频帧时间戳 CSV/统计能力。
+* timestamp interval 正常；
+* 10 分钟无异常；
+* Camera 最高支持 4K@30fps。
 
-不要让我重新实现或重新验证完整 V2。
+注意：
 
-如果 V2A 需要视频时间戳作为对比，可以直接复用现有 V2 程序。
+4K@30fps 是 Camera 能力证明，不代表 V4 必须使用 4K。
 
-# 四、V2A 当前硬件
+V4 应根据模型输入尺寸、图像转换成本、推理速度和控制延迟选择实际工作分辨率。
 
-音频硬件已经明确：
+建议优先比较：
+
+* 1280×720@30；
+* 1920×1080@30；
+* 4K@30 只作为 P2 压力测试。
+
+不要为了展示 4K 而牺牲实时控制延迟。
+
+## V2A 已完成
+
+音频硬件：
+
+* ES8388；
+* 板载驻极体麦克风。
+
+已经完成：
+
+* ALSA card；
+* PCM capture；
+* capture path；
+* mixer；
+* WAV；
+* format/rate/channels；
+* period/buffer；
+* 自研 alsa-lib C/C++ capture；
+* XRUN；
+* sample counter；
+* ALSA timestamp；
+* monotonic timestamp；
+* drift；
+* 10 分钟稳定性；
+* 文档和 Git。
+
+V4 不需要重新开发音频采集。
+
+## V3 已完成
+
+已经完成：
+
+* YOLOv8 模型部署；
+* ONNX/RKNN 模型；
+* RKNN Runtime C/C++ 推理；
+* RK3588 NPU 推理；
+* 测试照片推理正常；
+* 检测结果可以输出；
+* V3 文档和 Git。
+
+当前已知模型：
 
 ```text
-SoC:
+Model family:
+YOLOv8
+
+Runtime:
+RKNN Runtime
+
+Platform:
 RK3588
 
-Audio Codec:
-ES8388
-
-Microphone:
-开发板板载驻极体麦克风
-
-Audio Framework:
-Linux ASoC + ALSA
-
-用户态目标接口：
-alsa-lib / ALSA PCM
-
-最终产品音频来源：
-板载驻极体麦克风
+Target:
+Football
 ```
 
-请注意：
-
-虽然已经知道 Audio Codec 是 ES8388，但以下内容仍不得猜测：
+以下为V3阶段代码和背景知识：
 
 ```text
-ALSA card index：[待检测]
-ALSA card name：[待检测]
-PCM capture device：[待检测]
-hw:CARD,DEV：[待检测]
+YOLOv8 task:
+detect
 
-ES8388 I2C bus/address：[待检测或从 DTS 确认]
-RK3588 I2S controller：[待检测]
-Machine driver：[待检测]
+RKNN output tensor structure:
+待从 V3 tensor contract 获取
 
-板载驻极体麦克风连接到：
-LINPUT1 / LINPUT2 / RINPUT1 / RINPUT2 / 其他
-：[必须从原理图、DTS、厂商文档或实际 routing 证明]
+Model input width/height:
+[960,960,3]
 
-Mic Bias 配置：[待确认]
+Preprocess:
+resize / letterbox / crop
 
-Capture mixer path：[待确认]
-Capture gain：[待测试]
+Input color:
+RGB
 
-硬件支持的 sample format：[待检测]
-硬件支持的 sample rates：[待检测]
-硬件支持的 channel count：[待检测]
-period size：[待测]
-buffer size：[待测]
+Quantization:
+INT8
+
+class_count: 1
+class_id=0, name=ping_pong_ball
+
+Output coordinate format:
+xywh / xyxy / raw feature maps
+
+NMS:
+模型内 / CPU 后处理 / 已包含于 V3 demo
 ```
 
-不能因为芯片是 ES8388，就自行假设麦克风连接到某一路输入。
+# 四、首先必须确认模型任务类型
 
-# 五、V2A 一句话目标
-
-V2A 的目标是：
-
-确认 RK3588 → ASoC → ES8388 → 板载驻极体麦克风 → ALSA PCM 的真实音频采集链路，完成稳定的 PCM 音频采集程序，明确 format / sample rate / channel / period / buffer / mixer path，正确处理 XRUN，并建立能够与 V2 视频时间戳使用同一系统时间基线的音频时间戳与 sample clock 统计机制。
-
-V2A 最终需要证明：
+虽然项目最初描述过“足球分割模型”，当前实际程序使用 YOLOv8，并计划从：
 
 ```text
-Onboard Electret Mic
-→ ES8388 Analog Input
-→ ADC
-→ I2S
-→ RK3588 ASoC
-→ ALSA Card
-→ PCM Capture Device
-→ alsa-lib
-→ Stable PCM Samples
-→ Audio Timestamp
-→ Sample Counter
-→ Drift / XRUN Statistics
+x1, y1, x2, y2
 ```
 
-# 六、V2A 不做什么
+计算中心点。
 
-V2A 不做：
+第一步必须根据模型文件和 V3 tensor contract 确认：
 
-1. 不做 AAC 编码；
-2. 不做 Opus 编码；
-3. 不做 MP3 编码；
-4. 不做 H.264/H.265 视频编码；
-5. 不做 MP4/MKV mux；
-6. 不做 GStreamer 产品 pipeline；
-7. 不做 FFmpeg 产品 pipeline；
-8. 不做 RTSP；
-9. 不做音视频成品文件；
-10. 不做真正的 A/V sync 算法；
-11. 不做音频重采样补偿；
-12. 不做 lip-sync 调优；
-13. 不做网络音视频回传；
-14. 不做 SD 卡录像；
-15. 不做回声消除；
-16. 不做 AGC 算法；
-17. 不做降噪算法；
-18. 不做波束形成；
-19. 不做语音识别；
-20. 不做 NPU 音频模型；
-21. 不修改 ES8388 内核驱动；
-22. 不直接写 ES8388 寄存器；
-23. 不一开始修改 Device Tree；
-24. 不一开始使用 `i2cset`；
-25. 不一开始使用 `i2cdetect` 扫描整个总线；
-26. 不盲目修改 mixer controls。
-
-如果 ALSA card 和 PCM capture 已经存在，优先认为 BSP 的 Audio/ASoC bring-up 已完成。
-
-只有获得明确证据证明 DTS、machine driver 或 codec routing 配置有问题时，才进入 BSP 层排查。
-
-# 七、V2A 与 V8 的边界
-
-V2A 只负责：
+V4 文档和代码应使用：
 
 ```text
-Audio Capture
-+
-Audio Timestamp
-+
-Audio Sample Counter
-+
-Clock Baseline
-+
-XRUN / Stability
+Object Detection
+Bounding Box
+Box Center
 ```
 
-V8 才负责：
+不要继续声称使用 segmentation mask。
+
+V4 阶段名称可以调整为：
 
 ```text
-Video Timestamp
-+
-Audio Timestamp
-→ A/V Synchronization
-→ Encode
-→ Mux
-→ Stream / Record
+足球目标后处理、目标偏差与实时感知流水线
 ```
 
-因此 V2A 要为 V8 提供“可同步的数据”，但不能提前把 V2A 做成完整多媒体系统。
+# 五、对 V4 工作量的正确理解
 
-# 八、资料搜索要求
+球心基础公式确实简单：
 
-遇到技术问题时必须优先网页搜索，资料优先级：
+```cpp
+ball_x = (x1 + x2) * 0.5F;
+ball_y = (y1 + y2) * 0.5F;
+```
 
-1. 当前开发板厂商官方 Wiki；
-2. 当前开发板官方原理图；
-3. 当前开发板 BSP / DTS；
-4. Linux Kernel ASoC 官方文档；
-5. Linux Kernel ALSA PCM timestamp 官方文档；
-6. ALSA Project 官方 alsa-lib 文档；
-7. ALSA Project alsa-utils 文档；
-8. Linux ES8388 / ES8328 codec binding 和 driver；
-9. ES8388 Datasheet；
-10. Rockchip 官方 Audio/I2S 文档；
-11. 高质量社区资料仅作为辅助。
+但只有满足以下前提才正确：
 
-必须注意：
+1. `x1/y1/x2/y2` 已经完成 YOLO raw output decode；
+2. 已经完成 confidence filtering；
+3. 已经完成 class filtering；
+4. 已经完成 NMS；
+5. 坐标是 `xyxy` 而不是 `xywh`；
+6. 坐标已经从模型输入空间映射回原始 Camera 空间；
+7. letterbox padding 已经去除；
+8. 坐标已经 clip 到图像边界；
+9. 目标框有效；
+10. 多个足球时已经选择唯一控制目标；
+11. 结果没有因 pipeline 排队而过期；
+12. 当前帧不是丢球状态。
 
-ES8388 codec 层与具体开发板 machine routing 是两件事。
-
-不能因为网络上另一块 RK3588 + ES8388 开发板使用：
+所以 V4 的核心工程任务不是中心公式，而是建立：
 
 ```text
-Capture MIC Path
-Capture Volume
+Raw RKNN Output
+→ Valid Football Target
+→ Coordinate Contract
+→ Target State
+→ Control Error Contract
+→ Real-time Pipeline
 ```
 
-就假定当前开发板具有相同 control。
+# 六、V4 一句话目标
 
-必须先查看实际：
+V4 的目标是：
 
-```bash
-amixer controls
-amixer contents
+从 YOLOv8 RKNN 实际输出中稳定得到唯一、可信、映射到原始 Camera 坐标系的足球目标，生成包含中心点、置信度、目标尺寸、时间戳和丢球状态的目标观测结果，计算原始和归一化 dx/dy，并将 V2 Camera、V3 RKNN 和 V4 后处理整合为可持续运行的单进程多线程实时感知程序。
+
+V4 最终链路：
+
+```text
+Camera Frame
+→ Preprocess
+→ RKNN Inference
+→ YOLO Decode
+→ Confidence Filter
+→ Football Class Filter
+→ NMS
+→ Coordinate Reverse Mapping
+→ Target Selection
+→ Ball Center
+→ dx/dy
+→ Target State
+→ Mock Control Sink
 ```
 
-再决定 mixer 设置。
+P1 再加入：
 
-# 九、V2A 必须产出的交付物
+```text
+Audio Capture Thread
+→ Audio Health / Timestamp Statistics
+```
 
-建议新增目录：
+但不做 A/V mux。
+
+# 七、V4 不是物理闭环
+
+V4 可以形成：
+
+```text
+Camera
+→ Perception
+→ Error
+→ Mock Command
+```
+
+这是：
+
+```text
+实时感知和控制输入流水线
+```
+
+或：
+
+```text
+闭环骨架
+```
+
+但不能称为真实物理闭环。
+
+真实闭环必须包含：
+
+```text
+Error
+→ UART
+→ MCU
+→ Motor
+→ Gimbal Movement
+→ Camera View Changes
+→ New Error
+```
+
+因此：
+
+* V4：产生可靠控制输入；
+* V5：控制输入通过通信协议送出；
+* V6：执行器动作；
+* V7：真实闭环联调和控制优化。
+
+# 八、V4 严格边界
+
+V4 做：
+
+1. 检查真实 YOLOv8 输出结构；
+2. detection/segmentation 任务确认；
+3. raw output decode；
+4. dequantization；
+5. confidence threshold；
+6. class filtering；
+7. NMS；
+8. coordinate transform；
+9. de-letterbox；
+10. bounding-box validation；
+11. football target selection；
+12. box center 或 mask centroid；
+13. dx/dy；
+14. normalized error；
+15. target state；
+16. lost target；
+17. result stale detection；
+18. timestamp propagation；
+19. offline unit tests；
+20. Camera + RKNN + Postprocess 实时整合；
+21. bounded queues；
+22. frame-drop policy；
+23. graceful shutdown；
+24. pipeline metrics；
+25. Mock Control Sink；
+26. P1 Audio thread coexistence。
+
+V4 不做：
+
+1. 不制定正式 UART binary protocol；
+2. 不发送真实 MCU 命令；
+3. 不驱动舵机；
+4. 不做真实 PID；
+5. 不做云台限位；
+6. 不做物理闭环；
+7. 不做 RTSP；
+8. 不做 H.264/H.265 产品链；
+9. 不做 AAC/Opus；
+10. 不做音视频 mux；
+11. 不做 SD 卡录像；
+12. 不做复杂 UI；
+13. 不做多目标 tracking；
+14. 不做 ByteTrack；
+15. 不做 Kalman 多目标跟踪；
+16. 不做自动变焦；
+17. 不做 DMABUF/RGA 零拷贝优化；
+18. 不做 NPU 多 context；
+19. 不做复杂线程优先级调度；
+20. 不删除 V2、V2A、V3 独立测试程序。
+
+# 九、为什么现在可以开始多线程整合
+
+目前每个阶段的独立程序必须继续保留：
+
+```text
+v4l2_capture_test
+alsa_capture_test
+rknn_infer_test
+```
+
+它们是：
+
+* 模块测试；
+* 回归测试；
+* 制造测试；
+* 现场诊断工具。
+
+V4 新增一个产品集成程序，例如：
+
+```text
+visionarm_pipeline_test
+```
+
+或：
+
+```text
+visionarm_core
+```
+
+V4 不应把旧测试程序改写成一个巨大程序。
+
+正确结构：
+
+```text
+Reusable Libraries:
+camera
+audio
+inference
+postprocess
+pipeline_common
+
+Standalone Tests:
+v4l2_capture_test
+alsa_capture_test
+rknn_infer_test
+postprocess_test
+
+Integration:
+visionarm_pipeline_test
+```
+
+# 十、V4 多线程架构
+
+P0 推荐架构：
+
+```text
+                  ┌──────────────────┐
+                  │  Camera Thread   │
+                  │ V4L2 DQBUF/QBUF  │
+                  └────────┬─────────┘
+                           │
+                           │ FramePacket
+                           v
+                  ┌──────────────────┐
+                  │ Bounded Latest   │
+                  │ Frame Queue      │
+                  └────────┬─────────┘
+                           │
+                           v
+                  ┌──────────────────┐
+                  │ Inference Thread │
+                  │ preprocess+RKNN  │
+                  └────────┬─────────┘
+                           │
+                           │ InferencePacket
+                           v
+                  ┌──────────────────┐
+                  │ Bounded Result   │
+                  │ Queue            │
+                  └────────┬─────────┘
+                           │
+                           v
+                  ┌──────────────────┐
+                  │ Postprocess      │
+                  │ Target / dx/dy   │
+                  └────────┬─────────┘
+                           │
+                           │ TargetObservation
+                           v
+                  ┌──────────────────┐
+                  │ MockControlSink  │
+                  │ Telemetry/CSV    │
+                  └──────────────────┘
+```
+
+P1 可加入：
+
+```text
+                  ┌──────────────────┐
+                  │  Audio Thread    │
+                  │ ALSA PCM Capture │
+                  └────────┬─────────┘
+                           │
+                           v
+                  AudioHealth / Clock Metrics
+```
+
+Audio 在 V4 不进入视频推理队列。
+
+# 十一、队列和实时性原则
+
+V4 必须使用有界队列。
+
+禁止：
+
+```text
+std::queue
+无限增长
+```
+
+推荐 MVP：
+
+```text
+FrameQueue capacity:
+1～3
+
+InferenceResultQueue capacity:
+1～3
+```
+
+默认控制策略：
+
+```text
+Latest Frame Wins
+```
+
+当 Camera 速度高于推理速度时：
+
+```text
+丢弃旧帧
+保留最新帧
+```
+
+而不是：
+
+```text
+排队处理每一帧
+```
+
+原因：
+
+机器人控制更关心最新状态，而不是处理完整历史。
+
+必须统计：
+
+```text
+camera_frames
+frames_enqueued
+frames_dropped_by_queue
+inference_frames
+postprocess_frames
+stale_results
+queue_high_watermark
+```
+
+# 十二、V4L2 mmap buffer 生命周期
+
+这是多线程整合中的重要风险。
+
+Camera Thread 从 V4L2 得到的 mmap buffer，在重新执行：
+
+```text
+VIDIOC_QBUF
+```
+
+之后，该内存可能被驱动重新写入。
+
+所以禁止：
+
+```text
+把 mmap pointer 直接放进队列
+然后立即 QBUF
+```
+
+否则 inference thread 可能读取已经被摄像头覆盖的数据。
+
+V4 必须选择明确策略。
+
+## P0 推荐方案
+
+Camera Thread 在重新 QBUF 前，将需要的数据复制到应用拥有的 buffer。
+
+可以选择：
+
+### 方案 A：复制完整 Camera frame
+
+优点：
+
+* 简单；
+* 接口清楚。
+
+缺点：
+
+* 4K copy 成本大。
+
+### 方案 B：在 Camera Thread 或 Preprocess 模块中复制/转换成模型输入尺寸
+
+例如：
+
+```text
+Camera frame
+→ resize/colorspace
+→ owned 640×640 model input
+→ QBUF original V4L2 buffer
+```
+
+优点：
+
+* 队列数据小；
+* 适合 MVP；
+* 及时归还 V4L2 buffer。
+
+缺点：
+
+* Camera Thread 增加预处理工作。
+
+### 方案 C：延迟 QBUF，等 consumer 完成
+
+第一版不推荐。
+
+可能导致：
+
+* V4L2 buffer 饥饿；
+* Camera 停止；
+* 延迟变大。
+
+### 方案 D：DMABUF/RGA zero-copy
+
+留到 V9。
+
+V4 必须在 `threading_queue_design.md` 中明确实际选择。
+
+# 十三、V4 数据契约
+
+必须定义以下数据结构。
+
+## FramePacket
+
+至少包含：
+
+```cpp
+struct FramePacket {
+    uint64_t frame_id;
+
+    uint32_t v4l2_sequence;
+
+    int width;
+    int height;
+    int stride;
+
+    uint32_t pixel_format;
+
+    int64_t capture_timestamp_ns;
+    int64_t dequeue_timestamp_ns;
+
+    std::shared_ptr<std::vector<uint8_t>> owned_data;
+
+    size_t bytes_used;
+};
+```
+
+字段可以根据项目代码调整，但语义必须保留。
+
+不能在队列中保存即将被 QBUF 的裸 mmap pointer。
+
+## PreprocessTransform
+
+至少包含：
+
+```cpp
+struct PreprocessTransform {
+    int source_width;
+    int source_height;
+
+    int model_width;
+    int model_height;
+
+    float scale_x;
+    float scale_y;
+
+    float uniform_scale;
+
+    int pad_left;
+    int pad_top;
+    int pad_right;
+    int pad_bottom;
+
+    bool letterbox;
+};
+```
+
+这个结构必须跟随 inference result。
+
+否则 postprocess 无法正确还原坐标。
+
+## Detection
+
+至少包含：
+
+```cpp
+struct Detection {
+    float x1;
+    float y1;
+    float x2;
+    float y2;
+
+    float confidence;
+    int class_id;
+};
+```
+
+需要明确这些坐标当前属于：
+
+```text
+model input coordinates
+或
+original frame coordinates
+```
+
+禁止语义模糊。
+
+## InferencePacket
+
+至少包含：
+
+```cpp
+struct InferencePacket {
+    uint64_t frame_id;
+    uint32_t v4l2_sequence;
+
+    int64_t capture_timestamp_ns;
+    int64_t inference_start_ns;
+    int64_t inference_end_ns;
+
+    PreprocessTransform transform;
+
+    std::vector<Detection> detections;
+};
+```
+
+如果 V3 暂时输出 raw tensors，可以保留：
+
+```cpp
+std::vector<OutputTensor>
+```
+
+并让 Postprocess 模块负责 decode。
+
+但必须明确模块边界。
+
+## TargetObservation
+
+至少包含：
+
+```cpp
+enum class TargetState {
+    DETECTED,
+    LOST,
+    INVALID,
+    STALE
+};
+
+struct TargetObservation {
+    uint64_t frame_id;
+    uint32_t v4l2_sequence;
+
+    TargetState state;
+
+    float confidence;
+
+    float x1;
+    float y1;
+    float x2;
+    float y2;
+
+    float center_x;
+    float center_y;
+
+    float width;
+    float height;
+    float area;
+
+    int64_t capture_timestamp_ns;
+    int64_t result_timestamp_ns;
+    int64_t age_ns;
+};
+```
+
+## TargetError
+
+至少包含：
+
+```cpp
+struct TargetError {
+    uint64_t frame_id;
+
+    TargetState state;
+
+    float dx_px;
+    float dy_px;
+
+    float error_x_normalized;
+    float error_y_normalized;
+
+    float confidence;
+
+    int64_t capture_timestamp_ns;
+    int64_t generated_timestamp_ns;
+    int64_t age_ns;
+};
+```
+
+推荐归一化方式：
+
+```text
+dx_px = center_x - frame_width / 2
+dy_px = center_y - frame_height / 2
+
+error_x_normalized =
+    2 * dx_px / frame_width
+
+error_y_normalized =
+    2 * dy_px / frame_height
+```
+
+在图像坐标中：
+
+```text
+x 向右为正
+y 向下为正
+```
+
+必须在文档中固定。
+
+不要在 V4 直接假设：
+
+```text
+正 dx 对应云台向右
+正 dy 对应云台向下
+```
+
+电机方向映射在 V5/V6 确认。
+
+# 十四、YOLOv8 后处理要求
+
+不能直接假设 V3 已经返回最终 xyxy。
+
+必须检查现有代码。
+
+后处理可能包含：
+
+```text
+RKNN Output
+→ Dequantize
+→ Decode DFL / Box
+→ Class Confidence
+→ Threshold
+→ xywh to xyxy
+→ NMS
+→ Class Filter
+→ Scale to Original Image
+```
+
+如果 V3 已经完成其中一部分，V4 应：
+
+1. 识别已有实现；
+2. 提取成独立模块；
+3. 写入 tensor/postprocess contract；
+4. 不重复实现两套不一致代码。
+
+## 必须检查
+
+* output tensor count；
+* output tensor layout；
+* quantization scale/zp；
+* box coordinate format；
+* confidence含义；
+* class score含义；
+* NMS 是否已执行；
+* class id；
+* max detections。
+
+## 阈值
+
+至少配置：
+
+```text
+confidence_threshold
+nms_iou_threshold
+max_detections
+football_class_id
+```
+
+不得散落为 magic number。
+
+# 十五、坐标反变换
+
+如果模型输入使用直接 stretch resize：
+
+```text
+x_original = x_model * source_width / model_width
+y_original = y_model * source_height / model_height
+```
+
+如果使用 letterbox：
+
+```text
+x_unpadded = x_model - pad_left
+y_unpadded = y_model - pad_top
+
+x_original = x_unpadded / scale
+y_original = y_unpadded / scale
+```
+
+然后执行：
+
+```text
+clip x to [0, source_width - 1]
+clip y to [0, source_height - 1]
+```
+
+必须对以下内容写单元测试：
+
+* 横向 padding；
+* 纵向 padding；
+* 16:9 Camera → square model input；
+* 边界框超出图像；
+* 空框；
+* x2 < x1；
+* y2 < y1。
+
+# 十六、多足球目标选择
+
+第一版至少需要确定唯一目标。
+
+默认 MVP 可以使用：
+
+```text
+足球类别中置信度最高的检测框
+```
+
+但必须记录选择策略。
+
+P1 可以使用连续性评分：
+
+```text
+score =
+    confidence_weight * confidence
+    - distance_weight * distance_to_previous_center
+    + size_weight * normalized_area
+```
+
+不要求正式 tracking。
+
+必须处理：
+
+1. 无足球；
+2. 一个足球；
+3. 多个足球；
+4. 置信度接近；
+5. 当前目标突然消失；
+6. 新目标突然出现。
+
+# 十七、丢球和状态机
+
+V4 至少实现：
+
+```text
+NO_TARGET
+CANDIDATE
+DETECTED
+LOST
+STALE
+```
+
+可以简化，但不能只有：
+
+```cpp
+if (boxes.empty())
+```
+
+推荐加入可配置迟滞：
+
+```text
+acquire_hits:
+连续检测多少帧后确认目标
+
+lost_misses:
+连续丢失多少帧后进入 LOST
+```
+
+这样可以减少单帧误检/漏检造成的控制跳变。
+
+V4 不做主动搜索云台策略。
+
+LOST 时只输出状态，不输出随机电机命令。
+
+# 十八、旧帧和结果年龄
+
+必须计算：
+
+```text
+result_age =
+    result_generated_monotonic
+    - capture_timestamp
+```
+
+如果结果超过可配置阈值：
+
+```text
+max_result_age_ms
+```
+
+标记：
+
+```text
+STALE
+```
+
+STALE 结果不能继续作为后续云台控制输入。
+
+必须区分：
+
+* Camera frame drop；
+* queue drop；
+* inference result stale；
+* target lost。
+
+# 十九、滤波与控制边界
+
+V4 可以输出：
+
+* raw center；
+* raw dx/dy；
+* normalized error。
+
+P1 可以加入简单：
+
+* EMA；
+* median；
+* dead zone 预览。
+
+但必须同时保留 raw 数据。
+
+V4 不做正式 PID。
+
+建议接口：
+
+```text
+Raw Target Error
+→ optional ErrorFilter
+→ MockControlSink
+```
+
+正式控制策略和云台参数在 V7 调试。
+
+# 二十、V4 必须产出的交付物
+
+推荐目录：
 
 ```text
 VisionArm-BallTrack/
 ├── README.md
+│
 ├── docs/
-│   └── v2a_audio_alsa/
+│   └── v4_postprocess_pipeline/
 │       ├── README.md
-│       ├── audio_device_inventory.md
-│       ├── es8388_capture_path.md
-│       ├── alsa_capture_design.md
-│       ├── audio_clock_baseline.md
+│       ├── model_task_decision.md
+│       ├── postprocess_contract.md
+│       ├── coordinate_contract.md
+│       ├── target_selection.md
+│       ├── target_state_machine.md
+│       ├── pipeline_architecture.md
+│       ├── threading_queue_design.md
 │       ├── performance_report.md
 │       ├── troubleshooting.md
-│       └── v2a_acceptance.md
+│       └── v4_acceptance.md
 │
 ├── src/
 │   └── linux_app/
-│       └── audio/
+│       ├── common/
+│       │   ├── bounded_latest_queue.h
+│       │   ├── time_utils.h
+│       │   └── pipeline_types.h
+│       │
+│       ├── postprocess/
+│       │   ├── CMakeLists.txt
+│       │   ├── yolo_postprocessor.h
+│       │   ├── yolo_postprocessor.cpp
+│       │   ├── coordinate_mapper.h
+│       │   ├── coordinate_mapper.cpp
+│       │   ├── target_selector.h
+│       │   ├── target_selector.cpp
+│       │   ├── target_state_machine.h
+│       │   ├── target_state_machine.cpp
+│       │   ├── error_calculator.h
+│       │   └── error_calculator.cpp
+│       │
+│       └── pipeline/
 │           ├── CMakeLists.txt
-│           ├── alsa_capture.h
-│           ├── alsa_capture.cpp
-│           ├── wav_writer.h
-│           ├── wav_writer.cpp
+│           ├── vision_pipeline.h
+│           ├── vision_pipeline.cpp
+│           ├── pipeline_stats.h
+│           ├── pipeline_stats.cpp
+│           ├── mock_control_sink.h
+│           ├── mock_control_sink.cpp
 │           └── main.cpp
 │
-├── tools/
-│   └── v2a_audio/
-│       ├── collect_audio_info.sh
-│       ├── record_smoke_test.sh
-│       └── analyze_wav.py
+├── tests/
+│   └── v4/
+│       ├── test_coordinate_mapper.cpp
+│       ├── test_target_selector.cpp
+│       ├── test_state_machine.cpp
+│       ├── test_error_calculator.cpp
+│       └── fixtures/
+│
+├── configs/
+│   └── v4_pipeline.conf
 │
 ├── build/
-│   └── v2a_audio/
+│   └── v4/
+│
+├── tools/
+│   └── v4/
+│       ├── analyze_pipeline_csv.py
+│       ├── visualize_target_csv.py
+│       └── run_stability_test.sh
 │
 ├── logs/
-│   └── v2a_audio/
-│       ├── cards.txt
-│       ├── pcm.txt
-│       ├── arecord_list.txt
-│       ├── arecord_pcms.txt
-│       ├── mixer_controls.txt
-│       ├── mixer_contents.txt
-│       ├── asoc_dmesg.txt
-│       ├── hw_params.txt
-│       ├── alsa_state_before.state
-│       ├── smoke_test.log
-│       ├── stability_test.log
-│       ├── audio_frames.csv
-│       └── av_clock_baseline.csv
+│   └── v4/
+│       ├── offline_tests.log
+│       ├── integration.log
+│       ├── pipeline_frames.csv
+│       ├── target_results.csv
+│       └── stability_test.log
 │
 └── reports/
-    └── audio/
-        ├── microphone_test.wav
-        └── waveform_stats.txt
+    └── v4/
+        ├── annotated_samples/
+        └── charts/
 ```
+
+# 二十一、P0 / P1 / P2
 
 ## P0 必须完成
 
-1. 正确识别 ALSA sound card；
-2. 正确识别 PCM capture device；
-3. 证明该 PCM 对应 ES8388；
-4. 明确板载麦克风 capture path；
-5. 保存 mixer controls；
-6. 修改 mixer 前保存 ALSA state；
-7. 使用 `arecord` 成功录制；
-8. WAV 中能够确认真实麦克风声音；
-9. 明确真实硬件 format；
-10. 明确真实 sample rate；
-11. 明确真实 channel count；
-12. 明确实际 period size；
-13. 明确实际 buffer size；
-14. 自研 alsa-lib C/C++ capture 程序；
-15. PCM 连续采集稳定；
-16. XRUN 可检测；
-17. XRUN 恢复逻辑存在；
-18. 音频 sample counter 可统计；
-19. ALSA timestamp 可记录；
-20. 系统 monotonic timestamp 可记录；
-21. 10 分钟稳定测试；
-22. sample-clock drift 有统计；
-23. 音频波形 peak/RMS/clipping 等基本指标；
-24. V2A 文档完成；
-25. README 更新；
-26. Git 提交。
+1. 确认 YOLOv8 detect/segment；
+2. 文档表述同步；
+3. 现有 V3 后处理盘点；
+4. YOLO output contract；
+5. confidence filter；
+6. football class filter；
+7. NMS 状态明确；
+8. coordinate reverse mapping；
+9. box validation；
+10. target selection；
+11. center；
+12. dx/dy；
+13. normalized error；
+14. target state；
+15. lost handling；
+16. stale result；
+17. timestamp propagation；
+18. offline unit test；
+19. V2 + V3 + V4 单进程多线程整合；
+20. bounded queues；
+21. drop-old-frame；
+22. mmap buffer ownership 正确；
+23. Mock Control Sink；
+24. per-frame CSV；
+25. latency statistics；
+26. 10 分钟稳定测试；
+27. graceful shutdown；
+28. README；
+29. 文档；
+30. Git commit。
 
 ## P1 推荐完成
 
-1. 同时运行 V2 Camera 和 V2A Audio 10 分钟；
-2. 两者都记录 monotonic 时间；
-3. 验证音视频采集能够共存；
-4. 记录共同采集期间 CPU 使用率；
-5. 记录 audio sample clock 与 system clock drift；
-6. 对比 16 kHz / 44.1 kHz / 48 kHz 等实际支持率；
-7. 对 period/buffer 参数进行小范围对比；
-8. 记录 microphone noise floor；
-9. 记录 clipping；
-10. 记录 gain 设置。
+1. Audio Capture Thread 加入同一进程；
+2. Camera/Audio/NPU 共存 10 分钟；
+3. 多足球连续性选择；
+4. acquire/lost hysteresis；
+5. EMA 或 median；
+6. annotated sample；
+7. 30 分钟稳定测试；
+8. 720p/1080p 对比；
+9. CPU/内存/NPU 占用；
+10. queue-depth 对比；
+11. processing age 分布；
+12. p50/p95/p99 latency。
 
 ## P2 可延期
 
-1. AAC；
-2. Opus；
-3. MP3；
-4. Audio resampler；
-5. AV sync correction；
-6. GStreamer；
-7. FFmpeg mux；
-8. RTSP；
-9. SD 卡录像；
-10. AEC；
-11. AGC；
-12. Noise Suppression；
-13. Speech Recognition。
+1. 4K 实时推理；
+2. DMABUF；
+3. RGA；
+4. zero-copy；
+5. CPU affinity；
+6. real-time scheduling；
+7. NPU multi-core；
+8. 多 context；
+9. ByteTrack；
+10. Kalman；
+11. PID；
+12. UART；
+13. 编码和 mux。
 
-# 十、你第一次回复必须严格输出以下 13 部分
+# 二十二、你第一次回复必须严格输出以下 13 部分
 
-## 1. V2A 一句话目标
+## 1. V4 一句话目标
 
-说明这个阶段到底解决什么工程问题。
+说明：
 
-必须说明为什么：
+* 为什么 V4 不只是中心点公式；
+* 为什么现在适合开始 V2/V3/V4 多线程整合；
+* 为什么仍不能称为真实物理闭环。
 
-* 不能直接把麦克风交给 FFmpeg/GStreamer；
-* 不能直接开始 MP4 录制；
-* 需要先独立证明 ALSA capture 和 timestamp。
+## 2. V4 不做什么
 
-## 2. V2A 不做什么
+严格写明：
 
-严格写清阶段边界。
+* V5 才做 UART protocol；
+* V6 才做执行器；
+* V7 才做真实闭环和控制优化；
+* V8 才做音视频和录像；
+* V9 才做 zero-copy 等产品优化。
 
-必须明确：
+## 3. V4 最小可交付物
 
-音频编码、音视频同步、mux、网络回传、本地视频录像属于 V8。
-
-SD 卡长期可靠性属于 V9。
-
-## 3. V2A 最小可交付物
-
-按照：
-
-* P0；
-* P1；
-* P2；
-
-分别列出：
+按照 P0/P1/P2 列出：
 
 * 文档；
-* 日志；
 * 源码；
-* WAV；
+* 单元测试；
+* integration program；
+* config；
+* logs；
 * CSV；
-* 测试数据；
-* Git commit。
+* performance report；
+* Git。
 
 ## 4. 推荐目录结构
 
-给出本阶段完整目录树。
+给出完整新增目录，并解释用途。
 
-说明每个文件的用途。
+不要删除 V2、V2A、V3 独立测试程序。
 
-不要重新创建 V0/V1/V2 的工程。
+## 5. Markdown 文档模板
 
-## 5. 当前阶段 Markdown 文档模板
+直接给出以下文件的可复制模板：
 
-直接提供以下文件的可复制 Markdown 模板。
+### model_task_decision.md
 
-### `audio_device_inventory.md`
+包含：
 
-必须包含：
+* 模型名称；
+* detect/segment；
+* 证据；
+* V3 outputs；
+* 当前采用 box center 还是 mask centroid；
+* 原因；
+* README 需要如何同步；
+* 决策。
 
-* 开发板信息；
-* Kernel；
-* ALSA version；
-* codec；
-* ASoC card；
-* card index；
-* card name；
-* PCM device；
-* capture subdevice；
-* `/proc/asound/cards`；
-* `/proc/asound/pcm`；
-* `arecord -l`；
-* `arecord -L`；
-* codec driver；
-* I2S controller；
-* machine driver；
-* DTS 节点；
-* ES8388 I2C 地址；
-* 麦克风类型；
-* 最终 capture PCM；
-* 选择依据；
-* 未知项。
+### postprocess_contract.md
 
-### `es8388_capture_path.md`
+包含：
 
-必须包含：
+* raw RKNN output；
+* tensor shape；
+* quantization；
+* decode；
+* confidence；
+* class；
+* NMS；
+* output detection；
+* football class；
+* thresholds；
+* assumptions。
 
-```text
-Electret Microphone
-→ Mic Bias
-→ ES8388 Analog Input
-→ PGA / Mixer
-→ ADC
-→ I2S DAI
-→ RK3588 I2S RX
-→ DMA
-→ ASoC PCM
-→ ALSA
-```
+### coordinate_contract.md
 
-并记录：
+包含：
 
-* 麦克风连接引脚；
-* 证据来源；
-* Mic Bias；
-* Capture source；
-* Capture switch；
-* Capture volume；
-* ADC controls；
-* 实际 `amixer` control 名称；
-* 原始 ALSA state；
-* 修改后的 state；
-* 修改原因；
-* 回滚方法。
+* Camera coordinates；
+* model coordinates；
+* stretch/letterbox；
+* scale；
+* padding；
+* reverse transform；
+* clip；
+* center；
+* dx/dy；
+* normalized error；
+* sign convention；
+* unit tests。
 
-### `alsa_capture_design.md`
+### target_selection.md
 
-至少包含：
+包含：
 
-* 目标；
-* 为什么使用 alsa-lib；
-* 为什么正式能力验证优先使用 `hw:CARD,DEV`；
-* `hw:` 和 `plughw:` 区别；
-* PCM open；
-* access mode；
-* format；
-* rate；
-* channel；
-* period；
-* buffer；
-* hw_params；
-* sw_params；
-* timestamp mode；
-* timestamp type；
-* poll/readi；
-* sample counter；
-* XRUN；
-* EPIPE；
-* ESTRPIPE；
-* WAV 保存；
-* CSV；
-* signal handling；
-* 资源释放；
-* 后续 V8 接口。
+* zero target；
+* one target；
+* multiple targets；
+* confidence strategy；
+* continuity strategy；
+* invalid box；
+* target output。
 
-### `audio_clock_baseline.md`
+### target_state_machine.md
 
-必须包含：
+包含：
 
-* V2 视频时间戳现状；
-* V4L2 timestamp clock；
-* ALSA timestamp type；
-* `CLOCK_MONOTONIC`；
-* `CLOCK_MONOTONIC_RAW`；
-* 为什么不能混用；
-* audio trigger timestamp；
-* audio current/status timestamp；
-* application dequeue/read timestamp；
-* cumulative samples；
-* nominal audio time；
-* clock drift；
-* drift ppm；
-* V2A 只建立时间基线；
-* V8 才做真正 A/V sync；
-* 当前结论。
+* state；
+* transitions；
+* acquire_hits；
+* lost_misses；
+* stale；
+* output behavior。
 
-### `performance_report.md`
+### pipeline_architecture.md
 
-必须包含：
+包含：
 
-* 测试环境；
-* PCM device；
-* format；
-* sample rate；
-* channels；
-* bits/sample；
-* period frames；
-* buffer frames；
-* period duration；
-* buffer duration；
-* 测试时长；
-* total frames；
-* total samples；
-* nominal audio duration；
-* monotonic elapsed；
-* drift；
-* drift ppm；
-* XRUN count；
-* recover count；
-* short read；
-* read errors；
-* peak；
-* RMS；
-* DC offset；
-* clipping count；
-* CPU usage；
-* memory usage；
-* 原始日志；
-* 结论。
+* modules；
+* threads；
+* queues；
+* data flow；
+* timestamps；
+* control sink；
+* future V5 replacement；
+* Audio P1；
+* shutdown。
 
-### `troubleshooting.md`
+### threading_queue_design.md
+
+包含：
+
+* queue type；
+* capacity；
+* drop policy；
+* why latest-frame-wins；
+* mmap ownership；
+* backpressure；
+* stop semantics；
+* exception handling；
+* metrics。
+
+### performance_report.md
 
 至少包含：
 
-* 找不到 sound card；
-* 找不到 capture PCM；
-* card index 变化；
-* `arecord: device busy`；
-* `Invalid argument`；
-* format 不支持；
-* rate 不支持；
-* channel 不支持；
-* `snd_pcm_hw_params` 失败；
-* 没有声音；
-* 全零数据；
-* 只有噪声；
-* 音量过小；
-* 严重削波；
-* 左右声道只有一路；
-* Mic Bias 问题；
-* Capture Path 错误；
-* mixer control 名称不一致；
-* XRUN/EPIPE；
-* suspend/ESTRPIPE；
-* readi short read；
-* timestamp 不可用；
-* timestamp 类型不匹配；
-* CPU 负载导致 XRUN；
-* period 太小；
-* buffer 太小；
-* 48k 配置失败；
-* plughw 能录而 hw 不能录；
-* PulseAudio/PipeWire 占用；
-* ALSA state 被桌面环境修改；
-* V2 Camera 与 Audio 同时运行出现异常。
+* Camera config；
+* model；
+* input；
+* thread count；
+* queue capacity；
+* Camera fps；
+* inference fps；
+* postprocess fps；
+* control-result rate；
+* queue drops；
+* stale results；
+* capture-to-result min/mean/p50/p95/p99；
+* preprocess；
+* inference；
+* postprocess；
+* CPU；
+* memory；
+* NPU；
+* run duration；
+* errors；
+* conclusion。
 
-### `v2a_acceptance.md`
+### troubleshooting.md
 
 至少包含：
 
-| 验收项 | 证据 | 状态 | 备注 |
-| --- | -- | -- | -- |
+* wrong model type；
+* wrong output format；
+* wrong class id；
+* missing NMS；
+* duplicate boxes；
+* confidence wrong；
+* quantization scale/zp；
+* xywh/xyxy；
+* wrong letterbox reverse；
+* coordinate out of bounds；
+* multiple balls；
+* result flicker；
+* lost target；
+* stale result；
+* mmap pointer corruption；
+* queue growth；
+* deadlock；
+* thread exit；
+* high latency；
+* Camera faster than inference；
+* 4K copy cost；
+* Audio coexistence problem。
 
-状态只能使用：
+### v4_acceptance.md
+
+状态只能是：
 
 ```text
 PASS
@@ -701,1504 +1492,556 @@ FAIL
 BLOCKED
 ```
 
-并包含：
+包含进入 V5 的条件。
 
-* 是否允许进入 V3；
-* 是否具备进入 V8 音视频同步的音频基础；
-* 阻塞项；
-* 最终结论。
+## 6. 技术链路图
 
-## 6. 技术链路图或文字流程
+给出：
 
-必须给出至少以下三个图。
-
-### ASoC 硬件链路
-
-```text
-Onboard Electret Microphone
-        ↓
-      Mic Bias
-        ↓
-ES8388 Analog Input
-        ↓
-PGA / Analog Mixer
-        ↓
-       ADC
-        ↓
-ES8388 Digital Audio Interface
-        ↓ I2S
-RK3588 I2S Controller
-        ↓
-       DMA
-        ↓
- Linux ASoC
-        ↓
- ALSA PCM Device
-        ↓
-   alsa-lib
-        ↓
-Application
-```
-
-### ALSA PCM 数据路径
-
-```text
-snd_pcm_open()
-→ hw_params_any
-→ access
-→ format
-→ channels
-→ sample rate
-→ period size
-→ buffer size
-→ hw_params
-→ sw_params
-→ timestamp enable
-→ prepare
-→ poll / snd_pcm_readi
-→ PCM frames
-→ timestamp + sample counter
-→ CSV / WAV
-→ repeat
-→ drain/drop
-→ close
-```
-
-### 后续音视频同步接口
-
-```text
-V2 Video:
-
-frame_id
-v4l2_sequence
-video_timestamp
-dq_monotonic_timestamp
-
-                +
-                |
-                v
-
-V2A Audio:
-
-audio_chunk_id
-cumulative_frames
-frames_read
-alsa_timestamp
-audio_monotonic_timestamp
-nominal_sample_time
-
-                ↓
-
-V8:
-Common Timeline
-→ Drift Estimation
-→ Sync Policy
-→ Encode
-→ Mux
-```
-
-必须强调：
-
-V2A 不做 mux。
+* YOLO 后处理流程；
+* 坐标变换流程；
+* 多线程 pipeline；
+* V4→V5 ControlSink 替换图；
+* Audio P1 图。
 
 ## 7. 具体执行步骤
 
-必须按下面顺序推进。
+必须按以下顺序：
 
-### Step A：只读 ALSA/ASoC 盘点
+### Step A：确认模型任务和现有 V3 输出
 
-禁止先修改 mixer。
+### Step B：冻结 Postprocess Contract
 
-先确认：
+### Step C：离线实现坐标和目标逻辑
 
-* sound card；
-* PCM capture；
-* ES8388 driver；
-* I2S；
-* machine card；
-* DTS routing；
-* mixer controls。
+### Step D：单元测试
 
-### Step B：保存原始 ALSA State
+### Step E：提取可复用模块
 
-在修改任何 mixer control 以前保存完整 state。
+### Step F：实现 BoundedLatestQueue
 
-必须提供恢复方法。
+### Step G：解决 V4L2 mmap ownership
 
-### Step C：确认板载驻极体麦克风物理路径
+### Step H：Camera + RKNN 多线程整合
 
-证据优先级：
+### Step I：加入 Postprocess 和 MockControlSink
 
-```text
-原理图
-→ DTS
-→ 官方 BSP 文档
-→ ASoC routing
-→ mixer controls
-→ 实际录音实验
+### Step J：加入状态机和 stale 检测
+
+### Step K：短时测试
+
+### Step L：10 分钟稳定测试
+
+### Step M：P1 Audio 共存
+
+### Step N：报告和 Git
+
+每一步说明：
+
+* 执行位置；
+* 目的；
+* 代码；
+* 命令；
+* 正常现象；
+* 错误判断；
+* 输出路径；
+* 是否阻塞。
+
+## 8. 推荐代码和配置
+
+必须直接提供可编译或接近完整的核心代码设计，不得只给空泛伪代码。
+
+至少包括：
+
+### BoundedLatestQueue
+
+C++17：
+
+* mutex；
+* condition_variable；
+* bounded capacity；
+* push；
+* pop；
+* drop-oldest；
+* close；
+* stop wakeup；
+* metrics；
+* 禁止 copy；
+* 支持 move。
+
+### Pipeline Types
+
+完整定义：
+
+* FramePacket；
+* PreprocessTransform；
+* Detection；
+* InferencePacket；
+* TargetObservation；
+* TargetError；
+* PipelineCounters。
+
+### CoordinateMapper
+
+实现：
+
+* stretch；
+* letterbox；
+* clip；
+* invalid box；
+* center。
+
+### TargetSelector
+
+实现：
+
+* class filter；
+* confidence；
+* highest confidence MVP；
+* multiple target；
+* previous center optional。
+
+### TargetStateMachine
+
+实现：
+
+* acquire；
+* detect；
+* lost；
+* stale。
+
+### ErrorCalculator
+
+实现：
+
+* dx/dy；
+* normalized error；
+* sign convention。
+
+### MockControlSink
+
+接口建议：
+
+```cpp
+class IControlSink {
+public:
+    virtual ~IControlSink() = default;
+    virtual bool Submit(const TargetError& error) = 0;
+};
 ```
 
-不能反过来只靠试错猜。
-
-### Step D：枚举硬件 PCM 能力
-
-优先直接测试：
+V4：
 
 ```text
-hw:CARD,DEV
+MockControlSink
 ```
 
-而不是一开始使用 `default` 或 `plughw`。
+V5：
 
-目的：
+```text
+UartControlSink
+```
 
-防止 alsa-lib plugin 自动完成：
+不得让 Postprocess 直接操作串口。
 
-* resampling；
-* format conversion；
-* channel conversion；
+### VisionPipeline
 
-导致我误认为硬件原生支持某参数。
+管理：
 
-### Step E：arecord 最小录音实验
+* thread lifecycle；
+* queue lifecycle；
+* startup order；
+* shutdown；
+* errors；
+* stats。
 
-先使用设备原生支持的：
+### CLI
 
-* format；
-* rate；
-* channels。
+至少支持：
 
-录制 10～30 秒 WAV。
+```text
+--camera-device
+--camera-width
+--camera-height
+--camera-format
+--camera-fps
+--model
+--confidence
+--nms-iou
+--football-class
+--frame-queue
+--result-queue
+--max-result-age-ms
+--duration
+--csv
+--save-annotated
+--enable-audio
+```
+
+实际默认值必须来自已有 V2/V2A/V3 配置，不得猜测。
+
+## 9. 最小验证实验
+
+至少定义：
+
+### 实验一：坐标公式
+
+已知 xyxy，验证中心。
+
+### 实验二：Letterbox Reverse
+
+使用合成坐标，验证还原到原始 16:9 frame。
+
+### 实验三：No Target
+
+输出 LOST/NO_TARGET，不输出有效控制量。
+
+### 实验四：Multiple Targets
+
+验证唯一选择策略。
+
+### 实验五：Invalid Box
+
+拒绝：
+
+* NaN；
+* Inf；
+* x2<=x1；
+* y2<=y1；
+* 超小面积；
+* 越界后为空。
+
+### 实验六：Stale Result
+
+人为延迟，验证 STALE。
+
+### 实验七：Offline V3 Images
+
+使用 V3 测试照片，验证输出：
+
+```text
+class
+confidence
+xyxy
+center
+dx/dy
+```
+
+### 实验八：Real Camera Pipeline
+
+实时：
+
+```text
+V2 Camera
+→ V3 RKNN
+→ V4 Target Error
+```
+
+### 实验九：Queue Overload
+
+让 Camera 快于 inference。
 
 验证：
 
-* 文件有效；
-* 人说话/拍手能在波形中看出；
-* 可以复制到 PC 播放；
-* 不全零；
-* 不严重 clipping；
-* 声道正确。
+* queue 不增长；
+* old frame 被丢弃；
+* 程序仍处理最新帧；
+* drop count 正确。
 
-不要为了测试录音链路而同时调试开发板扬声器播放链路。
-
-### Step F：确定 MVP Audio Format
-
-评估实际硬件能力后决定。
-
-产品候选优先考虑：
-
-```text
-48 kHz
-S16_LE
-mono
-```
-
-但这只是候选，不得强制。
-
-如果 ES8388/ASoC 的 `hw:` PCM 实际要求 stereo，则优先：
-
-```text
-48 kHz
-S16_LE
-2 channels
-```
-
-保存原生 stereo PCM，后续 V8 如有需要再 downmix。
-
-不要在 V2A 为了获得 mono 而隐藏一次软件 channel conversion。
-
-### Step G：设计 period / buffer
-
-不能拍脑袋选择。
-
-至少记录：
-
-```text
-sample_rate
-period_frames
-period_time_ms
-periods
-buffer_frames
-buffer_time_ms
-```
-
-先使用稳定的中等参数。
-
-不要一开始追求极低 latency。
-
-### Step H：编写自研 alsa-lib C++ Capture
-
-必须完整实现，不允许只给伪代码。
-
-### Step I：Timestamp 和 Sample Clock
-
-开启 ALSA timestamp。
-
-优先尝试使用与 V2 V4L2 timestamp 一致的 clock domain。
-
-如果 V2 已确认使用：
-
-```text
-CLOCK_MONOTONIC
-```
-
-则 ALSA 优先尝试：
-
-```text
-SND_PCM_TSTAMP_TYPE_MONOTONIC
-```
-
-如果硬件或 alsa-lib 不支持，必须记录真实行为。
-
-不能静默 fallback。
-
-每个 audio chunk 至少保存：
-
-```text
-chunk_index
-frames_read
-cumulative_frames
-alsa_status_timestamp
-alsa_trigger_timestamp
-app_monotonic_before_read
-app_monotonic_after_read
-avail
-delay
-xrun_count
-```
-
-同时计算：
-
-```text
-nominal_audio_time =
-    cumulative_frames / actual_sample_rate
-```
-
-然后与系统 monotonic elapsed 对比。
-
-### Step J：短时测试
-
-至少 30～60 秒。
-
-统计：
-
-* frames；
-* XRUN；
-* read errors；
-* timestamps；
-* sample-clock drift；
-* peak/RMS/clipping。
-
-### Step K：10 分钟稳定性测试
+### 实验十：10 分钟稳定性
 
 要求：
 
-* 不保存巨量 WAV 也可以；
-* 可以直接丢弃 PCM payload；
-* 但必须完整运行 ALSA capture loop；
-* 必须保留 CSV 和统计；
-* 不能通过 sleep 模拟采集。
+* 无 crash；
+* 无 deadlock；
+* 无内存持续增长；
+* V4L2 无 buffer starvation；
+* RKNN 无错误；
+* postprocess 正常；
+* queue bounded；
+* timestamp 单调；
+* Ctrl+C 正常退出。
 
-### Step L：Video + Audio 共存实验
+### 实验十一：Audio P1
 
-这是 V2A 的推荐实验，但仍然不是 A/V sync。
+Camera + NPU + Audio 同时运行。
 
-同时运行：
+不做 mux。
 
-* 已经通过 V2 验收的 Camera capture；
-* 当前 ALSA capture。
+## 10. 常见坑和严格排查顺序
 
-持续建议 10 分钟。
+至少覆盖：
 
-验证：
+1. 把 detect 写成 segment；
+2. 直接把 raw tensor 当 xyxy；
+3. xywh/xyxy 混淆；
+4. confidence 含义错误；
+5. class id 错误；
+6. NMS 重复或遗漏；
+7. INT8 未反量化；
+8. letterbox padding 未去除；
+9. 以 model input center 代替 Camera center；
+10. Camera 4K 坐标和模型坐标混淆；
+11. 多足球随机跳目标；
+12. 单帧漏检立刻 LOST；
+13. 旧结果继续控制；
+14. y 轴方向没写清；
+15. mmap pointer 放队列后 QBUF；
+16. V4L2 buffer starvation；
+17. 无界 queue；
+18. Camera 30fps、推理 10fps 时延迟不断累积；
+19. 保存图片阻塞实时线程；
+20. 日志打印过多阻塞；
+21. shutdown 时 condition_variable 不唤醒；
+22. thread join 死锁；
+23. RKNN context 被多个线程并发调用；
+24. Audio 数据误放入 inference queue；
+25. 4K copy 消耗过大；
+26. 把 Mock Control 称为真实闭环。
 
-* Camera 仍无异常；
-* Audio 无 XRUN；
-* CPU/内存合理；
-* 两边都存在可比较的 monotonic timestamp。
-
-不要将两者 mux。
-
-### Step M：报告与 Git 提交
-
-原始日志和人工分析必须分开。
-
-每个步骤必须说明：
-
-1. 在 RK3588 还是开发 PC 执行；
-2. 目的；
-3. 命令；
-4. 正常结果；
-5. 异常判断；
-6. 日志保存位置；
-7. 是否阻塞下一步。
-
-# 十一、推荐命令和代码要求
-
-## 1. 创建目录
-
-提供：
-
-```bash
-mkdir -p docs/v2a_audio_alsa
-mkdir -p src/linux_app/audio
-mkdir -p tools/v2a_audio
-mkdir -p build/v2a_audio
-mkdir -p logs/v2a_audio
-mkdir -p reports/audio
-```
-
-## 2. ALSA 基础盘点
-
-至少给出：
-
-```bash
-cat /proc/asound/cards
-cat /proc/asound/pcm
-cat /proc/asound/devices
-
-arecord --version
-arecord -l
-arecord -L
-
-aplay -l
-aplay -L
-```
-
-说明：
-
-`aplay` 在这里主要辅助盘点 sound card，不代表 V2A 必须调试 Playback。
-
-## 3. ASoC / Kernel 信息
-
-至少包含：
-
-```bash
-dmesg | grep -iE 'es8388|es8328|asoc|alsa|audio|sound|i2s'
-
-lsmod | grep -iE 'snd|es83|rockchip'
-
-find /sys/bus/i2c/devices \
-  -maxdepth 2 \
-  -name name \
-  -print \
-  -exec cat {} \; 2>/dev/null
-```
-
-如果 debugfs 已经挂载，可查看：
+严格排查顺序：
 
 ```text
-/sys/kernel/debug/asoc/
+Model task
+→ V3 output contract
+→ quantization
+→ decode
+→ confidence/class
+→ NMS
+→ model-space box
+→ reverse letterbox
+→ original-space box
+→ target selection
+→ center/error
+→ timestamp age
+→ mmap ownership
+→ queue policy
+→ thread lifecycle
+→ performance
 ```
 
-但不能为了本阶段一开始就修改系统配置。
-
-如果 `dtc` 已安装，可以把当前 live device tree 导出为只读分析材料，例如：
-
-```bash
-dtc -I fs -O dts /proc/device-tree \
-  > logs/v2a_audio/live_device_tree.dts
-```
-
-如果 `dtc` 不存在，不允许只为了这一项马上安装软件。
-
-## 4. Mixer 只读盘点
-
-确定 `<CARD>` 后必须提供：
-
-```bash
-amixer -c <CARD> scontrols
-amixer -c <CARD> controls
-amixer -c <CARD> contents
-```
-
-分别保存到日志。
-
-禁止在看到输出前写类似：
-
-```bash
-amixer cset ...
-```
-
-## 5. 保存原始 ALSA State
-
-必须给出适用于当前系统的：
-
-```bash
-alsactl -f logs/v2a_audio/alsa_state_before.state \
-  store <CARD>
-```
-
-并给出对应恢复方式。
-
-修改 mixer 前必须执行。
-
-## 6. PCM Hardware Parameters
-
-必须首先通过实际设备检测。
-
-例如根据当前 alsa-utils 支持情况使用：
-
-```bash
-arecord \
-  -D hw:<CARD>,<DEVICE> \
-  --dump-hw-params \
-  -t raw \
-  -d 1 \
-  /dev/null
-```
-
-如果命令因当前 alsa-utils 语法不同失败，应先：
-
-```bash
-arecord --help
-```
-
-不得直接改用 `plughw` 来掩盖问题。
-
-## 7. arecord Smoke Test
-
-在实际能力确认后提供类似：
-
-```bash
-arecord \
-  -D hw:<CARD>,<DEVICE> \
-  -f <FORMAT> \
-  -r <RATE> \
-  -c <CHANNELS> \
-  -d 20 \
-  reports/audio/microphone_test.wav \
-  2>&1 | tee logs/v2a_audio/smoke_test.log
-```
-
-参数必须来自检测结果。
-
-不能自行填写。
-
-## 8. WAV 基础验证
-
-至少包含：
-
-```bash
-file reports/audio/microphone_test.wav
-stat reports/audio/microphone_test.wav
-sha256sum reports/audio/microphone_test.wav
-```
-
-如果系统有 `soxi`：
-
-```bash
-soxi reports/audio/microphone_test.wav
-```
-
-如果系统有 `ffprobe`：
-
-```bash
-ffprobe -hide_banner reports/audio/microphone_test.wav
-```
-
-但不得为了 V2A 强制安装 FFmpeg。
-
-最重要的是：
-
-把 WAV 复制到 PC 后实际试听，并进行波形统计。
-
-## 9. Audio 信息收集脚本
-
-直接提供完整：
-
-```text
-tools/v2a_audio/collect_audio_info.sh
-```
-
-要求：
-
-1. `#!/usr/bin/env bash`；
-2. 不修改系统；
-3. 不修改 mixer；
-4. 不安装包；
-5. 不执行 i2cset；
-6. 不自动扫描危险 I2C 地址；
-7. 单个命令失败继续执行；
-8. 缺失工具标记 SKIPPED；
-9. 每项有标题；
-10. 记录时间；
-11. 保存到 `logs/v2a_audio/`；
-12. 可传入 card index；
-13. 可传入 PCM device；
-14. 默认只执行只读操作。
-
-## 10. 自研 ALSA Capture 程序
-
-必须直接提供完整可编译 C++ 程序：
-
-```text
-src/linux_app/audio/
-├── CMakeLists.txt
-├── alsa_capture.h
-├── alsa_capture.cpp
-├── wav_writer.h
-├── wav_writer.cpp
-└── main.cpp
-```
-
-不得只给伪代码。
-
-主要依赖：
-
-```text
-alsa-lib
-```
-
-不得依赖：
-
-* OpenCV；
-* FFmpeg；
-* GStreamer；
-* PulseAudio；
-* PipeWire。
-
-CMake 至少：
-
-```text
-C++17
--Wall
--Wextra
--Wpedantic
-```
-
-使用：
-
-```text
-pkg-config alsa
-```
-
-或：
-
-```text
--lasound
-```
-
-编译前先检测开发环境，不要直接安装软件。
-
-程序至少支持：
-
-```text
---device <hw:CARD,DEV>
---rate <Hz>
---channels <count>
---format <S16_LE/...>
---period-frames <count>
---buffer-frames <count>
---duration <seconds>
---output <wav/raw>
---csv <path>
---no-save
---timestamp-type <monotonic/monotonic-raw>
---stats-interval <seconds>
-```
-
-程序必须实现：
-
-### PCM 初始化
-
-```text
-snd_pcm_open
-snd_pcm_hw_params_any
-snd_pcm_hw_params_set_access
-snd_pcm_hw_params_set_format
-snd_pcm_hw_params_set_channels
-snd_pcm_hw_params_set_rate_near
-snd_pcm_hw_params_set_period_size_near
-snd_pcm_hw_params_set_buffer_size_near
-snd_pcm_hw_params
-```
-
-必须打印：
-
-```text
-requested_rate
-actual_rate
-requested_channels
-actual_channels
-requested_format
-actual_format
-requested_period_frames
-actual_period_frames
-requested_buffer_frames
-actual_buffer_frames
-```
-
-如果 ALSA 自动选择 nearest value，必须把 requested 和 actual 分开记录。
-
-### Software Params
-
-必须研究并合理配置：
-
-```text
-snd_pcm_sw_params_current
-snd_pcm_sw_params_set_avail_min
-snd_pcm_sw_params_set_tstamp_mode
-snd_pcm_sw_params_set_tstamp_type
-snd_pcm_sw_params
-```
-
-不要为了“低延迟”随意设置极端参数。
-
-### Capture
-
-优先第一版实现：
-
-```text
-SND_PCM_ACCESS_RW_INTERLEAVED
-+
-snd_pcm_readi()
-```
-
-这是可以接受的。
-
-V2A 不强制 mmap PCM。
-
-以后如有低延迟需要再扩展。
-
-### Timestamp
-
-程序至少需要获取：
-
-```text
-CLOCK_MONOTONIC application timestamps
-
-ALSA status timestamp
-
-ALSA trigger timestamp
-```
-
-根据当前 alsa-lib 版本合理使用：
-
-```text
-snd_pcm_status
-snd_pcm_status_get_htstamp
-snd_pcm_status_get_trigger_htstamp
-```
-
-如果有更可靠的 ALSA API，例如：
-
-```text
-snd_pcm_htimestamp()
-```
-
-可以同时记录。
-
-必须解释这些 timestamp 各自代表什么。
-
-不能把应用 `readi()` 返回时间直接声称为 ADC 采样时间。
-
-### PCM Frame Accounting
-
-必须正确理解：
-
-```text
-1 PCM frame =
-所有 channel 在一个 sample instant 的数据
-```
-
-例如：
-
-```text
-2 channel
-S16_LE
-
-1 frame = 4 bytes
-```
-
-但代码必须动态计算，而不是写死。
-
-程序至少统计：
-
-```text
-total_frames
-total_samples
-total_bytes
-cumulative_frames
-nominal_audio_duration
-```
-
-### XRUN
-
-必须处理：
-
-```text
--EPIPE
-```
-
-记录：
-
-```text
-xrun_count
-xrun_timestamp
-recovery_count
-```
-
-可以使用：
-
-```text
-snd_pcm_recover()
-```
-
-或明确恢复流程。
-
-不能发生 XRUN 后悄悄继续而不记录。
-
-### Suspend
-
-如果遇到：
-
-```text
--ESTRPIPE
-```
-
-必须有明确处理逻辑或至少明确错误报告。
-
-### Error Handling
-
-至少区分：
-
-```text
-EPIPE
-ESTRPIPE
-EAGAIN
-其他错误
-```
-
-### WAV
-
-第一版只需要支持一个明确的 PCM WAV 子集即可，例如：
-
-```text
-S16_LE PCM
-```
-
-如果当前硬件最终选择其他格式：
-
-* 可以先输出 raw PCM；
-* 或完善 WAV writer。
-
-不能写错误 WAV header。
-
-程序退出时必须正确回填：
-
-```text
-RIFF size
-data size
-```
-
-### Signal Metrics
-
-如果实际 MVP 使用 `S16_LE`，至少实时统计：
-
-```text
-sample_min
-sample_max
-peak
-RMS
-DC offset
-clipping_samples
-```
-
-如果 stereo，应支持：
-
-```text
-left peak/RMS
-right peak/RMS
-```
-
-这样可以判断板载麦克风究竟在哪个 channel。
-
-不得仅通过“听起来有声音”确定声道。
-
-### Signal Handling
-
-支持：
-
-```text
-SIGINT
-SIGTERM
-```
-
-能够安全停止：
-
-* capture；
-* WAV；
+## 11. V4 完成前自查清单
+
+提供完整可复制 Markdown checklist。
+
+至少覆盖：
+
+* 模型任务；
+* 后处理；
+* 坐标；
+* target selection；
+* state；
+* stale；
+* data contracts；
+* mmap ownership；
+* bounded queue；
+* thread lifecycle；
+* Camera/RKNN integration；
+* Mock Control；
 * CSV；
-* PCM；
-* 文件。
-
-## 11. CSV 设计
-
-每个 audio chunk 至少保存：
-
-```text
-chunk_index
-frames_requested
-frames_read
-cumulative_frames
-bytes_read
-
-app_mono_before_ns
-app_mono_after_ns
-
-alsa_timestamp_sec
-alsa_timestamp_nsec
-
-trigger_timestamp_sec
-trigger_timestamp_nsec
-
-avail_frames
-delay_frames
-
-xrun_count
-recovery_count
-
-chunk_peak
-chunk_rms
-```
-
-如果某 ALSA timestamp API 不可用：
-
-必须：
-
-```text
-NA
-```
-
-不能伪造。
-
-## 12. Drift 统计
-
-必须计算：
-
-```text
-nominal_audio_duration_s =
-    total_frames / actual_rate
-```
-
-以及：
-
-```text
-monotonic_elapsed_s
-```
-
-计算：
-
-```text
-drift_s =
-    nominal_audio_duration_s
-    - monotonic_elapsed_s
-```
-
-以及：
-
-```text
-drift_ppm =
-    drift_s
-    / monotonic_elapsed_s
-    * 1,000,000
-```
-
-必须说明：
-
-这个结果是当前 Audio Sample Clock 与系统时间基线之间的工程测量值。
-
-不能仅凭一次短测就得出长期同步结论。
-
-## 13. 与 V2 Camera 的时间基线
-
-读取我已经完成的 V2 设计。
-
-首先确认视频端实际使用：
-
-```text
-V4L2 timestamp clock type
-```
-
-如果 V2 已确认是：
-
-```text
-V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC
-```
-
-则本阶段应优先让 ALSA 使用：
-
-```text
-SND_PCM_TSTAMP_TYPE_MONOTONIC
-```
-
-建立共同时间基线。
-
-如果视频实际不是 MONOTONIC：
-
-不能强行假设。
-
-必须先说明两边 clock domain，再设计后续 V8 的 timestamp normalization。
-
-# 十二、最小验证实验
-
-必须定义下面的实验。
-
-## 实验 1：ALSA Card 身份
-
-证明：
-
-```text
-ALSA card
-→ ES8388
-→ 正确 PCM capture device
-```
-
-不能仅靠 card index。
-
-因为 card index 可能重启后变化。
-
-尽量记录 card name 和稳定标识。
-
-## 实验 2：板载麦克风路径
-
-通过：
-
-```text
-原理图/DTS
-+
-mixer controls
-+
-录音实验
-```
-
-证明板载 electret microphone 的 capture path。
-
-## 实验 3：arecord 录音
-
-录制至少 20 秒。
-
-测试动作建议：
-
-```text
-0-5s：安静
-5-10s：说话
-10-15s：拍手
-15-20s：说话
-```
-
-用于辨识真实信号。
-
-## 实验 4：声道确认
-
-如果硬件暴露 2-channel：
-
-分别统计 L/R：
-
-```text
-RMS
-peak
-```
-
-判断：
-
-* 两路都有信号；
-* 只有左路；
-* 只有右路；
-* 是否存在复制声道。
-
-不能凭感觉判断。
-
-## 实验 5：自研 C++ Capture
-
-必须绕开：
-
-```text
-arecord
-```
-
-由自己的 alsa-lib 程序完成采集。
-
-## 实验 6：30～60 秒统计
-
-要求：
-
-* 0 XRUN 为目标；
-* timestamp 正常；
-* frames 连续；
-* sample accounting 正确。
-
-## 实验 7：10 分钟稳定性
-
-至少：
-
-```text
-10 minutes
-```
-
-要求记录：
-
-* XRUN count；
-* recovery count；
-* total frames；
-* actual elapsed；
-* drift；
-* drift ppm；
-* CPU；
-* memory。
-
-不要规定一个未经测量依据的 ppm PASS 阈值。
-
-第一轮先建立 baseline。
-
-## 实验 8：V2 + V2A 同时运行
-
-Camera：
-
-复用已完成的 V2 程序。
-
-Audio：
-
-运行 V2A 程序。
-
-建议：
-
-```text
-10 minutes
-```
-
-验证：
-
-```text
-Video:
-无异常掉帧
-timestamp 正常
-
-Audio:
-无 XRUN
-timestamp 正常
-
-System:
-无 OOM
-无明显异常负载
-```
-
-这仍然不是 A/V synchronization。
-
-## 实验 9：共同 Clock Baseline
-
-从两份 CSV 中确认：
-
-```text
-Video monotonic timestamps
-Audio monotonic timestamps
-```
-
-处于可以比较的同一时间域。
-
-V2A 到此即可。
-
-不要在这里做 mux。
-
-# 十三、常见坑和严格排查顺序
-
-必须详细覆盖以下问题。
-
-## 常见坑
-
-1. 把 `card 0` 写死；
-2. 把 `default` 当作真实硬件；
-3. 一开始使用 `plughw`；
-4. plughw 自动 resample 后误认为硬件支持；
-5. 没有区分 Playback 和 Capture PCM；
-6. ES8388 card 存在但麦克风 routing 错误；
-7. Mic Bias 未开启；
-8. Capture source 选错；
-9. Capture switch muted；
-10. Capture volume 太低；
-11. gain 太高导致 clipping；
-12. 只改 mixer 不保存原状态；
-13. 直接复制其他 RK3588 板的 `amixer cset`；
-14. 使用错误 card index；
-15. 麦克风只有一个 channel 有效；
-16. stereo interleaved 解析错误；
-17. frame 和 sample 概念混淆；
-18. sample rate 请求值和 actual 值不一致；
-19. period size 请求值和 actual 值不一致；
-20. buffer size 设置不合理；
-21. period 太小导致 XRUN；
-22. 忽略 `snd_pcm_readi()` short read；
-23. 忽略 EPIPE；
-24. XRUN 恢复后不计数；
-25. timestamp 未开启；
-26. ALSA timestamp 和 application timestamp 混淆；
-27. REALTIME 和 MONOTONIC 混用；
-28. MONOTONIC 和 MONOTONIC_RAW 混用但没有记录；
-29. 把 readi 返回时刻称为“采样时间”；
-30. 不记录 cumulative frames；
-31. 没有 sample-clock drift；
-32. WAV header 错误；
-33. 10 分钟测试直接产生超大日志；
-34. PulseAudio/PipeWire 抢占 PCM；
-35. 音频 PCM 被其他进程占用；
-36. root 用户测试正常、普通用户权限失败；
-37. 一遇到无声就改 DTS；
-38. 一遇到无声就用 i2cset 写 ES8388；
-39. 一遇到无声就换 kernel；
-40. 一开始直接接 FFmpeg/GStreamer；
-41. V2A 没完成就开始 MP4 mux；
-42. 同时运行 Camera 后出现 Audio XRUN，却误判为 Codec 问题。
-
-## 排查顺序必须严格是
-
-```text
-ASoC card 是否注册
-↓
-ALSA card 身份
-↓
-PCM capture 是否存在
-↓
-ES8388 driver 是否绑定
-↓
-Machine driver / DTS routing
-↓
-板载麦克风物理连接
-↓
-Mixer read-only inventory
-↓
-保存 ALSA state
-↓
-Capture source / Mic Bias / Gain
-↓
-arecord + hw PCM
-↓
-format/rate/channels
-↓
-PCM signal validity
-↓
-自研 alsa-lib capture
-↓
-period / buffer
-↓
-XRUN
-↓
-timestamp
-↓
-sample clock drift
-↓
-Camera + Audio coexistence
-```
-
-不能一遇到问题就：
-
-* 重刷系统；
-* 修改 kernel；
-* 修改 Device Tree；
-* 写 ES8388 registers。
-
-# 十四、V2A 完成前自查清单
-
-给我完整可复制 Markdown checklist。
-
-至少包含：
-
-## ALSA 身份
-
-* [ ] `/proc/asound/cards` 已保存
-* [ ] `/proc/asound/pcm` 已保存
-* [ ] `arecord -l` 已保存
-* [ ] `arecord -L` 已保存
-* [ ] ES8388 card 已确认
-* [ ] Capture PCM 已确认
-* [ ] 没有依赖 card index 猜测设备
-
-## Hardware Path
-
-* [ ] 板载驻极体麦克风路径已确认
-* [ ] Mic Bias 状态已确认
-* [ ] ES8388 input 已确认
-* [ ] I2S path 已确认
-* [ ] ASoC routing 已记录
-
-## Mixer
-
-* [ ] `amixer controls` 已保存
-* [ ] `amixer contents` 已保存
-* [ ] 原始 ALSA state 已保存
-* [ ] mixer 修改有理由
-* [ ] mixer 修改可恢复
-
-## PCM Parameters
-
-* [ ] hardware format 已确认
-* [ ] hardware sample rate 已确认
-* [ ] hardware channels 已确认
-* [ ] actual period 已记录
-* [ ] actual buffer 已记录
-* [ ] MVP audio format 已确定
-
-## Signal
-
-* [ ] arecord WAV 有真实声音
-* [ ] WAV 非全零
-* [ ] peak 正常
-* [ ] RMS 正常
-* [ ] clipping 已统计
-* [ ] channel 分布已确认
-
-## C/C++
-
-* [ ] 自研 alsa-lib 程序可以运行
-* [ ] 参数可以命令行配置
-* [ ] 实际 hw params 会打印
-* [ ] frame/sample/byte accounting 正确
-* [ ] WAV/raw 输出正确
-* [ ] Ctrl+C 安全退出
-
-## Stability
-
-* [ ] 30～60 秒测试完成
-* [ ] 10 分钟测试完成
-* [ ] XRUN 已统计
-* [ ] recover 已统计
-* [ ] read errors 已统计
-* [ ] CPU 已记录
-* [ ] memory 已记录
-
-## Timestamp
-
-* [ ] ALSA timestamp mode 已确认
-* [ ] ALSA timestamp type 已确认
-* [ ] trigger timestamp 已记录
-* [ ] current/status timestamp 已记录
-* [ ] application MONOTONIC timestamp 已记录
-* [ ] cumulative frames 已记录
-* [ ] nominal audio time 已计算
-* [ ] drift 已计算
-* [ ] drift ppm 已计算
-
-## A/V 基线
-
-* [ ] V2 视频 clock type 已确认
-* [ ] Audio 和 Video clock domain 已比较
-* [ ] Camera + Audio 并行采集验证完成
-* [ ] 没有在 V2A 提前做 mux
-
-## 文档
-
-* [ ] audio_device_inventory.md 完成
-* [ ] es8388_capture_path.md 完成
-* [ ] alsa_capture_design.md 完成
-* [ ] audio_clock_baseline.md 完成
-* [ ] performance_report.md 完成
-* [ ] troubleshooting.md 完成
-* [ ] v2a_acceptance.md 完成
-* [ ] README 已更新
-* [ ] Git 已提交
-
-# 十五、V2A 延期时降级方案
-
-## P0 不能砍
-
-1. ALSA card 身份；
-2. ES8388 身份；
-3. PCM capture device；
-4. 板载麦克风真实 capture path；
-5. mixer state；
-6. arecord 成功；
-7. 有真实声音 WAV；
-8. format；
-9. rate；
-10. channels；
-11. 自研 alsa-lib capture；
-12. XRUN 统计；
-13. cumulative frames；
-14. monotonic timestamp；
-15. ALSA timestamp；
-16. 10 分钟稳定测试；
-17. drift baseline；
-18. 文档；
-19. Git。
-
-## 可以降级
-
-1. 只测试一个最终 MVP sample rate；
-2. 只使用 `RW_INTERLEAVED`；
-3. 不做 ALSA mmap；
-4. 暂时不做复杂 poll；
-5. 不做长期 WAV 保存；
-6. 不做多个 period 参数 benchmark；
-7. Camera + Audio 联合测试可从 10 分钟降到 5 分钟，但必须标记 WARN；
-8. 暂时不制定严格 drift ppm 指标。
-
-## 可以完全延期
-
-1. AAC；
-2. Opus；
-3. Resampler；
-4. A/V synchronization correction；
-5. MP4；
-6. MKV；
-7. RTSP；
-8. Network streaming；
-9. SD recording；
-10. AGC；
-11. AEC；
-12. Noise suppression。
-
-# 十六、面试可讲点
-
-V2A 完成后，我应该能够解释：
-
-1. Linux ASoC 与 ALSA 的关系；
-2. Codec driver、CPU DAI、machine driver 的关系；
-3. ES8388 在系统中的作用；
-4. 驻极体麦克风为什么需要模拟前端/Mic Bias；
-5. Audio Codec ADC 与 I2S 的关系；
-6. `/proc/asound/cards`；
-7. PCM device；
-8. ALSA `hw:` 和 `plughw:` 的区别；
-9. 为什么底层验证使用 `hw:`；
-10. PCM frame 与 sample 的区别；
-11. sample format；
-12. sample rate；
-13. channel；
-14. period；
-15. buffer；
-16. alsa-lib hw_params；
-17. alsa-lib sw_params；
-18. `snd_pcm_readi()`；
-19. XRUN/EPIPE；
-20. XRUN recovery；
-21. ALSA timestamp；
-22. trigger timestamp；
-23. MONOTONIC 和 REALTIME 区别；
-24. Audio sample clock 与 system clock 的区别；
-25. drift ppm；
-26. 为什么音视频同步不能只靠线程同时启动；
-27. 为什么 V2A 要给 V8 留 timestamp；
-28. 如何验证板载麦克风到底在哪个 channel；
-29. 如何避免误修改 ES8388 mixer；
-30. 如何验证 Camera 与 Audio 能否同时稳定运行。
-
-# 十七、V2A → 后续阶段准入条件
-
-V2A 完成后才允许将 Audio 模块视为可交付输入源。
-
-最低条件：
-
-* [ ] ES8388 ALSA card 已明确
-* [ ] capture PCM 已明确
-* [ ] 板载驻极体麦克风路径已明确
-* [ ] mixer 配置已明确
-* [ ] mixer 配置有备份和回滚方式
-* [ ] 原生硬件 format/rate/channels 已明确
-* [ ] arecord 录音成功
-* [ ] WAV 有真实有效声音
-* [ ] 自研 C/C++ ALSA capture 正常
-* [ ] 10 分钟连续采集稳定
-* [ ] XRUN 有统计
-* [ ] timestamp 有统计
-* [ ] cumulative sample/frame counter 正常
-* [ ] sample clock drift baseline 已得到
-* [ ] V2 Camera clock type 已确认
-* [ ] Audio/Video 已具备共同时间基线或已明确两者差异
-* [ ] Camera + Audio 并行运行无阻塞问题
-* [ ] V2A 测试报告完成
+* 10 分钟稳定性；
+* Audio P1；
+* docs；
+* README；
+* Git。
+
+## 12. 延期时降级方案
+
+P0 不能砍：
+
+* detect/segment 真相；
+* output contract；
+* coordinate reverse；
+* football class；
+* confidence；
+* NMS 状态；
+* unique target；
+* center；
+* dx/dy；
+* normalized error；
+* lost；
+* stale；
+* Camera+RKNN+Postprocess；
+* bounded queue；
+* correct buffer ownership；
+* MockControlSink；
+* 10 分钟测试；
+* docs；
+* Git。
+
+可以降级：
+
+* Audio 暂不合入；
+* 只用最高置信度目标；
+* 暂不 EMA；
+* 暂不复杂状态机；
+* 只支持一个 Camera 配置；
+* 只保存少量 annotated frames；
+* 只测试 720p 或 1080p。
+
+可以延期：
+
+* 4K product mode；
+* tracking；
+* Kalman；
+* PID；
+* UART；
+* DMABUF；
+* RGA；
+* zero-copy；
+* Audio mux；
+* 网络；
+* SD recording。
+
+## 13. 面试可讲点和 V4→V5 准入条件
+
+面试可讲：
+
+* YOLOv8 后处理；
+* RKNN output；
+* INT8 dequantization；
+* confidence/NMS；
+* coordinate systems；
+* reverse letterbox；
+* target selection；
+* lost state；
+* stale result；
+* normalized error；
+* V4L2 mmap buffer lifetime；
+* producer/consumer；
+* bounded queue；
+* latest-frame-wins；
+* backpressure；
+* multithread shutdown；
+* latency percentile；
+* 为什么保留独立测试工具；
+* 为什么 V4 不是物理闭环；
+* ControlSink abstraction。
+
+只有以下全部满足才能进入 V5：
+
+* [ ] 模型任务已确认
+* [ ] 后处理契约已冻结
+* [ ] 足球 class 已确认
+* [ ] confidence/NMS 正常
+* [ ] 坐标已映射回原始画面
+* [ ] 唯一目标策略正常
+* [ ] center 正常
+* [ ] dx/dy 正常
+* [ ] normalized error 正常
+* [ ] lost 状态正常
+* [ ] stale 状态正常
+* [ ] V2 Camera 已接入
+* [ ] V3 RKNN 已接入
+* [ ] 多线程队列有界
+* [ ] mmap ownership 正确
+* [ ] 旧帧丢弃策略正常
+* [ ] MockControlSink 正常
+* [ ] 10 分钟稳定测试通过
+* [ ] 没有死锁或持续内存增长
+* [ ] 文档完成
 * [ ] README 更新
-* [ ] Git 提交完成
+* [ ] Git 提交
 
-如果以下任一情况存在，V2A 必须标记 BLOCKED：
-
-1. ES8388 card 无法确认；
-2. 没有 PCM capture device；
-3. 板载麦克风 routing 完全不明确；
-4. 只能通过 plughw 录音、真实 hw PCM 能力仍未知；
-5. 录音数据全零；
-6. 只能得到不可解释的噪声；
-7. 持续发生 XRUN 且原因未确定；
-8. 10 分钟测试无法通过；
-9. timestamp 完全没有建立；
-10. 不能统计 cumulative PCM frames；
-11. 原始 mixer 状态未保存却进行了大量修改；
-12. Audio 与 Camera 同时运行存在严重资源冲突且原因未确定。
-
-V2A 完成后：
-
-可以继续 V3 RKNN 推理阶段。
-
-V8 开始前必须保留：
+V5 的任务是：
 
 ```text
-AudioFrame / AudioChunk {
-    data
-    frames
-    channels
-    sample_rate
-    format
-    cumulative_frames
-    alsa_timestamp
-    monotonic_timestamp
-}
+TargetError
+→ Protocol Encoder
+→ UART TX
+→ MCU RX
+→ Status RX
 ```
 
-作为后续 Audio/Video pipeline 的正式接口。
+V5 只需用：
 
-# 十八、后续与你的协作方式
+```text
+UartControlSink
+```
 
-后续对话必须遵守：
+替换：
 
-1. 先只读检测，后修改；
-2. 第一轮不要直接给 `amixer cset`；
-3. 我贴 `arecord -l` 后再判断 card；
-4. 我贴 `amixer contents` 后再判断 mixer；
-5. 不猜 Mic Bias control 名；
-6. 不猜 Capture Path control 名；
-7. 不猜 card index；
-8. 不猜 PCM device；
-9. 不猜 sample rate；
-10. 不猜 channels；
-11. 不猜 period/buffer；
-12. 每个判断都引用真实输出；
-13. 每项结果使用 PASS/WARN/FAIL/BLOCKED；
-14. 未确认内容标记 UNKNOWN；
-15. 修改 mixer 前必须备份；
-16. 修改 DTS 前必须证明用户态配置无法解决；
-17. 禁止无依据写 ES8388 register；
-18. 禁止提前使用 FFmpeg/GStreamer 掩盖 ALSA 问题；
-19. 原始日志与分析报告分开；
-20. 每条命令注明在 RK3588 还是 PC 执行；
-21. 发现目标过大时主动砍范围；
-22. 不重复 V1 和 V2 已完成内容；
-23. V2A 最后必须生成正式验收报告和 Git commit 建议。
+```text
+MockControlSink
+```
 
-现在开始帮助我完成 V2A。
+而不应重新改写 Camera、Inference 或 Postprocess。
 
-你的第一轮回复必须严格按照以下 13 个主部分输出：
+# 二十三、协作要求
 
-1. V2A 一句话目标
-2. V2A 不做什么
-3. V2A 最小可交付物
+后续每轮必须遵守：
+
+1. 先读取 V3 真实代码；
+2. 不猜模型是 detect 还是 segment；
+3. 不猜输出格式；
+4. 不猜 class id；
+5. 不猜 NMS 状态；
+6. 不猜 letterbox；
+7. 每项结果标记 PASS/WARN/FAIL/BLOCKED；
+8. 先离线单元测试，再实时整合；
+9. 先正确性，再性能；
+10. 不将 mmap 裸指针跨线程错误使用；
+11. 不使用无界队列；
+12. 不为了“每帧都处理”制造高延迟；
+13. 不删除阶段测试工具；
+14. 不提前写 UART；
+15. 不提前控制云台；
+16. 不提前做 mux；
+17. 命令注明 PC 或 RK3588；
+18. 原始日志和分析报告分开；
+19. V4 最后必须生成验收报告和 Git commit 建议；
+20. 发现设计过大时主动砍 P1/P2，不砍 P0。
+
+现在开始帮助我完成 V4。
+
+第一轮回复必须严格包含以下 13 部分：
+
+1. V4 一句话目标
+2. V4 不做什么
+3. V4 最小可交付物
 4. 推荐目录结构
 5. Markdown 文档模板
-6. ASoC / ALSA / ES8388 技术链路
+6. YOLO 后处理、坐标变换和多线程技术链路
 7. 具体执行步骤
-8. 推荐命令和完整代码设计
+8. 推荐 C++ 类、接口、队列、配置和代码设计
 9. 最小验证实验
 10. 常见坑和严格排查顺序
-11. V2A 完成前自查清单
+11. V4 完成前自查清单
 12. 延期时降级方案
-13. 面试可讲点 + V2A 验收和下一阶段准入条件
+13. 面试可讲点与 V4→V5 准入条件
 
-第一轮不要猜测任何实际 ALSA card index、PCM device、ES8388 input pin、Capture Path、Capture Volume、sample rate、channel、period 或 buffer。
+第一步必须让我提供或检查：
 
-先从只读 ALSA/ASoC 环境盘点开始。
+* V3 模型类型；
+* V3 tensor contract；
+* V3 当前 postprocess 代码；
+* 模型 input size；
+* preprocess resize/letterbox；
+* football class id；
+* 当前 output box format；
+* 当前 confidence/NMS 实现；
+* V2 FramePacket 接口；
+* V2 capture pixel format。
 
 最终原则：
 
-只有当“板载驻极体麦克风 → ES8388 → ASoC → ALSA PCM → 自研 C/C++ Capture → Timestamp → Sample Counter → 10 分钟稳定性测试”整条链路有完整证据后，才认为 V2A 完成。
+V4 不只是计算两行球心坐标。
 
-V2A 完成不代表音视频同步已经完成。
+V4 只有在：
 
-真正的音视频同步、编码、mux、网络回传和 SD 卡录像必须留到 V8。
+```text
+V2 Camera
+→ V3 RKNN
+→ Correct YOLO Postprocess
+→ Original-Frame Coordinates
+→ Unique Target
+→ Ball Center
+→ dx/dy
+→ Target State
+→ Bounded Multithread Pipeline
+→ MockControlSink
+```
+
+全链路有证据、能够稳定运行并完成测试报告后，才算完成。
+
+V4 可以完成实时感知流水线和控制输入闭环骨架，但不能宣称已经完成真实云台闭环。
