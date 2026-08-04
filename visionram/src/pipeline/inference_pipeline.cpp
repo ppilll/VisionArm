@@ -44,7 +44,21 @@ InferencePipeline::InferencePipeline(
       free_input_slots_(std::max<std::size_t>(
           1U, engine != nullptr ? engine->input_slot_count() : 0U)),
       free_output_slots_(std::max<std::size_t>(
-          1U, engine != nullptr ? engine->output_slot_count() : 0U)) {}
+          1U, engine != nullptr ? engine->output_slot_count() : 0U)),
+      input_slot_wait_(config.latency_sample_capacity),
+      latest_frame_queue_wait_(config.latency_sample_capacity),
+      capture_to_preprocess_start_(config.latency_sample_capacity),
+      preprocess_duration_(config.latency_sample_capacity),
+      rknn_input_submit_(config.latency_sample_capacity),
+      rknn_output_bind_(config.latency_sample_capacity),
+      rknn_bind_total_(config.latency_sample_capacity),
+      rknn_run_(config.latency_sample_capacity),
+      rknn_output_get_(config.latency_sample_capacity),
+      rknn_output_release_(config.latency_sample_capacity),
+      rknn_total_(config.latency_sample_capacity),
+      postprocess_duration_(config.latency_sample_capacity),
+      capture_to_result_(config.latency_sample_capacity),
+      result_age_(config.latency_sample_capacity) {}
 
 InferencePipeline::~InferencePipeline() {
     Stop();
@@ -71,6 +85,7 @@ bool InferencePipeline::Start() {
         config_.captured_frame_queue_capacity == 0U ||
         config_.prepared_frame_queue_capacity == 0U ||
         config_.completed_frame_queue_capacity == 0U ||
+        config_.latency_sample_capacity == 0U ||
         broker_->GetSnapshot().closed || !video_dependencies_valid) {
         std::cerr << "InferencePipeline dependencies/config are invalid\n";
         return false;
@@ -85,15 +100,13 @@ bool InferencePipeline::Start() {
     }
 
     for (std::size_t index = 0U;
-         index < engine_->input_slot_count();
-         ++index) {
+         index < engine_->input_slot_count(); ++index) {
         if (!free_input_slots_.TryPush(index)) {
             return false;
         }
     }
     for (std::size_t index = 0U;
-         index < engine_->output_slot_count();
-         ++index) {
+         index < engine_->output_slot_count(); ++index) {
         if (!free_output_slots_.TryPush(index)) {
             return false;
         }
@@ -114,6 +127,10 @@ bool InferencePipeline::Start() {
 
     try {
         camera_->Start();
+        camera_buffer_count_at_start_.store(
+            camera_->buffer_count(), std::memory_order_release);
+        stop_requested_.store(false, std::memory_order_release);
+        fatal_error_.store(false, std::memory_order_release);
         running_.store(true, std::memory_order_release);
         started_once_ = true;
 
@@ -145,11 +162,14 @@ bool InferencePipeline::Start() {
         std::cerr << "pipeline start failed with an unknown exception\n";
     }
 
+    SignalFailure();
     Stop();
     return false;
 }
 
 void InferencePipeline::SignalFailure() noexcept {
+    fatal_error_.store(true, std::memory_order_release);
+    stop_requested_.store(true, std::memory_order_release);
     running_.store(false, std::memory_order_release);
     if (broker_ != nullptr) {
         broker_->Close();
@@ -172,26 +192,15 @@ void InferencePipeline::Stop() noexcept {
         return;
     }
 
-    // Normal shutdown is staged. Stop raw-frame production and processing
-    // first, but keep the encoded-packet queue alive until the video worker has
-    // finished. This guarantees that slow file/TCP work never owns a Camera
-    // lease and that packets already copied out of MPP can still be drained.
+    // Normal shutdown closes only the producer edge first. Each producer then
+    // closes its downstream queue after draining, so split mode cannot lose the
+    // final CompletedFrame.
+    stop_requested_.store(true, std::memory_order_release);
     running_.store(false, std::memory_order_release);
-    if (broker_ != nullptr) {
-        broker_->Close();
-    }
     if (camera_ != nullptr) {
         camera_->RequestStop();
     }
-    captured_frames_.Stop();
-    video_frames_.Stop();
-    prepared_frames_.Stop();
-    completed_frames_.Stop();
-    free_input_slots_.Stop();
-    free_output_slots_.Stop();
 
-    // The Camera owner drains Broker completions while worker threads release
-    // their outstanding Video/Inference leases.
     if (capture_thread_.joinable()) {
         capture_thread_.join();
     }
@@ -208,6 +217,7 @@ void InferencePipeline::Stop() noexcept {
         postprocess_thread_.join();
     }
 
+    // No more encoded packets can be produced after the video thread exits.
     encoded_packets_.Stop();
     if (encoded_packet_thread_.joinable()) {
         encoded_packet_thread_.join();
@@ -216,9 +226,29 @@ void InferencePipeline::Stop() noexcept {
     if (encoded_packet_sink_ != nullptr) {
         encoded_packet_sink_->Flush();
     }
+
+    if (broker_ != nullptr) {
+        const CaptureBufferBrokerSnapshot broker_snapshot =
+            broker_->GetSnapshot();
+        broker_outstanding_frames_before_stop_.store(
+            broker_snapshot.outstanding_frames, std::memory_order_release);
+        broker_outstanding_leases_before_stop_.store(
+            broker_snapshot.outstanding_leases, std::memory_order_release);
+    }
     if (camera_ != nullptr) {
+        camera_outstanding_before_stop_.store(
+            camera_->outstanding_buffers(), std::memory_order_release);
         camera_->Stop();
     }
+
+    graceful_shutdown_completed_.store(
+        !fatal_error_.load(std::memory_order_acquire) &&
+            camera_outstanding_before_stop_.load(std::memory_order_acquire) == 0U &&
+            broker_outstanding_frames_before_stop_.load(
+                std::memory_order_acquire) == 0U &&
+            broker_outstanding_leases_before_stop_.load(
+                std::memory_order_acquire) == 0U,
+        std::memory_order_release);
 }
 
 void InferencePipeline::RequeueDirect(
@@ -237,8 +267,8 @@ void InferencePipeline::DrainRequeueRequests() noexcept {
     while (broker_->TryPopRequeue(&request)) {
         if (!camera_->Requeue(request)) {
             requeue_failure_count_.fetch_add(1U, std::memory_order_relaxed);
-            running_.store(false, std::memory_order_release);
-            camera_->RequestStop();
+            SignalFailure();
+            break;
         }
     }
 }
@@ -258,16 +288,17 @@ void InferencePipeline::DrainRequeueRequestsUntilClosed() noexcept {
 
 void InferencePipeline::CaptureLoop() noexcept {
     try {
-        while (running_.load(std::memory_order_acquire)) {
+        while (!stop_requested_.load(std::memory_order_acquire)) {
             DrainRequeueRequests();
 
             CaptureFrameView frame;
             const CaptureResult result = camera_->Capture(&frame);
-
             if (result == CaptureResult::TIMEOUT) {
+                camera_timeout_count_.fetch_add(1U, std::memory_order_relaxed);
                 continue;
             }
             if (result == CaptureResult::WAKE) {
+                camera_wake_count_.fetch_add(1U, std::memory_order_relaxed);
                 DrainRequeueRequests();
                 continue;
             }
@@ -299,14 +330,14 @@ void InferencePipeline::CaptureLoop() noexcept {
                 break;
             }
 
-            // Publish the low-latency inference branch before applying video
-            // backpressure. A temporarily full video queue must not delay the
-            // newest inference frame from reaching the preprocess worker.
-            std::optional<FrameLeasePtr> evicted;
+            PendingInferenceFrame pending;
+            pending.lease = std::move(inference_lease);
+            pending.enqueue_timestamp_ns = MonotonicNowNs();
+            std::optional<PendingInferenceFrame> evicted;
             if (!captured_frames_.PushLatest(
-                    std::move(inference_lease), &evicted)) {
-                if (evicted.has_value() && *evicted) {
-                    (void)(*evicted)->Release(
+                    std::move(pending), &evicted)) {
+                if (evicted.has_value() && evicted->lease) {
+                    (void)evicted->lease->Release(
                         FrameReleaseReason::PIPELINE_STOP);
                 }
                 if (dispatch.video_encoder) {
@@ -316,16 +347,15 @@ void InferencePipeline::CaptureLoop() noexcept {
                 break;
             }
 
-            if (evicted.has_value() && *evicted) {
+            if (evicted.has_value() && evicted->lease) {
                 replaced_count_.fetch_add(1U, std::memory_order_relaxed);
-                (void)(*evicted)->Release(
+                (void)evicted->lease->Release(
                     FrameReleaseReason::REPLACED_BY_NEWER_FRAME);
             }
 
             if (config_.enable_video) {
                 if (!dispatch.video_encoder ||
-                    !video_frames_.WaitPush(
-                        std::move(dispatch.video_encoder))) {
+                    !video_frames_.WaitPush(std::move(dispatch.video_encoder))) {
                     if (dispatch.video_encoder) {
                         (void)dispatch.video_encoder->Release(
                             FrameReleaseReason::PIPELINE_STOP);
@@ -344,6 +374,9 @@ void InferencePipeline::CaptureLoop() noexcept {
         SignalFailure();
     }
 
+    // Producer-owned close chain.
+    captured_frames_.Stop();
+    video_frames_.Stop();
     broker_->Close();
     DrainRequeueRequests();
     DrainRequeueRequestsUntilClosed();
@@ -356,7 +389,7 @@ void InferencePipeline::VideoLoop() noexcept {
             if (!source) {
                 continue;
             }
-            if (!running_.load(std::memory_order_acquire)) {
+            if (fatal_error_.load(std::memory_order_acquire)) {
                 (void)source->Release(FrameReleaseReason::PIPELINE_STOP);
                 source.reset();
                 continue;
@@ -365,9 +398,6 @@ void InferencePipeline::VideoLoop() noexcept {
             std::vector<EncodedPacket> packets;
             const bool encoded =
                 video_encoder_->Encode(source->frame(), &packets);
-
-            // The encoder has copied every compressed packet into application
-            // storage. Release the raw Camera buffer before any slow sink work.
             (void)source->Release(
                 encoded ? FrameReleaseReason::COMPLETED
                         : FrameReleaseReason::PROCESSING_ERROR);
@@ -384,7 +414,7 @@ void InferencePipeline::VideoLoop() noexcept {
 
             for (EncodedPacket& packet : packets) {
                 if (!encoded_packets_.WaitPush(std::move(packet))) {
-                    if (running_.load(std::memory_order_acquire)) {
+                    if (!fatal_error_.load(std::memory_order_acquire)) {
                         video_packets_dropped_count_.fetch_add(
                             1U, std::memory_order_relaxed);
                     }
@@ -440,26 +470,33 @@ void InferencePipeline::EncodedPacketLoop() noexcept {
 }
 
 void InferencePipeline::PreprocessLoop() noexcept {
-    FrameLeasePtr source;
-
+    PendingInferenceFrame pending;
     try {
-        while (captured_frames_.WaitPop(&source)) {
-            if (!source) {
-                continue;
-            }
-            if (!running_.load(std::memory_order_acquire)) {
-                (void)source->Release(FrameReleaseReason::PIPELINE_STOP);
-                source.reset();
-                continue;
-            }
-
+        while (true) {
+            // Final R6 policy: wait for an input slot first. While this thread
+            // waits, Capture keeps replacing the single pending latest frame.
+            const int64_t wait_start_ns = MonotonicNowNs();
             std::size_t input_slot_index = 0U;
-            if (!free_input_slots_.TryPop(&input_slot_index)) {
-                skipped_no_input_count_.fetch_add(
-                    1U, std::memory_order_relaxed);
-                (void)source->Release(
-                    FrameReleaseReason::SKIPPED_NO_RESOURCE);
-                source.reset();
+            if (!free_input_slots_.WaitPop(&input_slot_index)) {
+                break;
+            }
+            const int64_t slot_acquired_ns = MonotonicNowNs();
+
+            if (!captured_frames_.WaitPop(&pending)) {
+                (void)free_input_slots_.TryPush(input_slot_index);
+                break;
+            }
+            const int64_t latest_dequeue_ns = MonotonicNowNs();
+
+            if (!pending.lease) {
+                (void)free_input_slots_.TryPush(input_slot_index);
+                continue;
+            }
+            if (fatal_error_.load(std::memory_order_acquire)) {
+                (void)pending.lease->Release(
+                    FrameReleaseReason::PIPELINE_STOP);
+                pending = {};
+                (void)free_input_slots_.TryPush(input_slot_index);
                 continue;
             }
 
@@ -468,17 +505,21 @@ void InferencePipeline::PreprocessLoop() noexcept {
             if (destination == nullptr) {
                 preprocess_failure_count_.fetch_add(
                     1U, std::memory_order_relaxed);
-                (void)source->Release(
+                (void)pending.lease->Release(
                     FrameReleaseReason::PROCESSING_ERROR);
-                source.reset();
+                pending = {};
                 (void)free_input_slots_.TryPush(input_slot_index);
                 continue;
             }
 
-            const CaptureFrameView& frame = source->frame();
+            const CaptureFrameView& frame = pending.lease->frame();
             PreparedFrame prepared;
             prepared.input_slot_index = input_slot_index;
             prepared.identity = frame.identity;
+            prepared.inference_enqueue_ns = pending.enqueue_timestamp_ns;
+            prepared.input_slot_wait_start_ns = wait_start_ns;
+            prepared.input_slot_acquired_ns = slot_acquired_ns;
+            prepared.latest_frame_dequeue_ns = latest_dequeue_ns;
             prepared.preprocess_start_ns = MonotonicNowNs();
 
             bool source_sync_ok = true;
@@ -522,8 +563,7 @@ void InferencePipeline::PreprocessLoop() noexcept {
                     frame, *destination, &prepared.transform);
             }
 
-            if (destination_guard.active() &&
-                !destination_guard.End()) {
+            if (destination_guard.active() && !destination_guard.End()) {
                 dmabuf_sync_failure_count_.fetch_add(
                     1U, std::memory_order_relaxed);
                 destination_sync_ok = false;
@@ -535,18 +575,18 @@ void InferencePipeline::PreprocessLoop() noexcept {
             }
 
             prepared.preprocess_end_ns = MonotonicNowNs();
-            const bool source_processing_ok =
+            const bool processing_ok =
                 process_ok &&
                 (source_sync_ok || !config_.require_cpu_dmabuf_sync) &&
                 (destination_sync_ok ||
                  !config_.require_bound_input_dmabuf_sync);
-            (void)source->Release(
-                source_processing_ok
+            (void)pending.lease->Release(
+                processing_ok
                     ? FrameReleaseReason::COMPLETED
                     : FrameReleaseReason::PROCESSING_ERROR);
-            source.reset();
+            pending = {};
 
-            if (!source_processing_ok) {
+            if (!processing_ok) {
                 preprocess_failure_count_.fetch_add(
                     1U, std::memory_order_relaxed);
                 (void)free_input_slots_.TryPush(input_slot_index);
@@ -560,37 +600,35 @@ void InferencePipeline::PreprocessLoop() noexcept {
         }
     } catch (const std::exception& error) {
         std::cerr << "preprocess thread failed: " << error.what() << '\n';
-        if (source && source->valid()) {
-            (void)source->Release(FrameReleaseReason::PROCESSING_ERROR);
+        if (pending.lease && pending.lease->valid()) {
+            (void)pending.lease->Release(
+                FrameReleaseReason::PROCESSING_ERROR);
         }
         SignalFailure();
     } catch (...) {
         std::cerr << "preprocess thread failed with unknown exception\n";
-        if (source && source->valid()) {
-            (void)source->Release(FrameReleaseReason::PROCESSING_ERROR);
+        if (pending.lease && pending.lease->valid()) {
+            (void)pending.lease->Release(
+                FrameReleaseReason::PROCESSING_ERROR);
         }
         SignalFailure();
     }
 
-    source.reset();
-    FrameLeasePtr pending;
-    while (captured_frames_.TryPop(&pending)) {
-        if (pending && pending->valid()) {
-            (void)pending->Release(FrameReleaseReason::PIPELINE_STOP);
+    pending = {};
+    PendingInferenceFrame queued;
+    while (captured_frames_.TryPop(&queued)) {
+        if (queued.lease && queued.lease->valid()) {
+            (void)queued.lease->Release(FrameReleaseReason::PIPELINE_STOP);
         }
-        pending.reset();
+        queued = {};
     }
+    prepared_frames_.Stop();
 }
 
 void InferencePipeline::NpuLoop() noexcept {
     PreparedFrame prepared;
     try {
         while (prepared_frames_.WaitPop(&prepared)) {
-            if (!running_.load(std::memory_order_acquire)) {
-                (void)free_input_slots_.TryPush(prepared.input_slot_index);
-                continue;
-            }
-
             std::size_t output_slot_index = 0U;
             if (!free_output_slots_.WaitPop(&output_slot_index)) {
                 (void)free_input_slots_.TryPush(prepared.input_slot_index);
@@ -602,7 +640,9 @@ void InferencePipeline::NpuLoop() noexcept {
             completed.prepared = prepared;
             completed.inference_start_ns = MonotonicNowNs();
             const bool ok = engine_->Run(
-                prepared.input_slot_index, output_slot_index);
+                prepared.input_slot_index,
+                output_slot_index,
+                &completed.rknn_timing);
             completed.inference_end_ns = MonotonicNowNs();
             (void)free_input_slots_.TryPush(prepared.input_slot_index);
 
@@ -627,6 +667,10 @@ void InferencePipeline::NpuLoop() noexcept {
         std::cerr << "NPU thread failed with unknown exception\n";
         SignalFailure();
     }
+
+    // This close is the split-mode fix: Postprocess drains every completed
+    // frame, including the final frame produced during normal shutdown.
+    completed_frames_.Stop();
 }
 
 bool InferencePipeline::ProcessCompletedFrame(
@@ -662,17 +706,36 @@ bool InferencePipeline::ProcessCompletedFrame(
     PerceptionPacket packet;
     packet.identity = completed->prepared.identity;
     packet.transform = completed->prepared.transform;
-    packet.preprocess_start_ns =
-        completed->prepared.preprocess_start_ns;
-    packet.preprocess_end_ns =
-        completed->prepared.preprocess_end_ns;
+    packet.inference_enqueue_ns = completed->prepared.inference_enqueue_ns;
+    packet.input_slot_wait_start_ns =
+        completed->prepared.input_slot_wait_start_ns;
+    packet.input_slot_acquired_ns =
+        completed->prepared.input_slot_acquired_ns;
+    packet.latest_frame_dequeue_ns =
+        completed->prepared.latest_frame_dequeue_ns;
+    packet.preprocess_start_ns = completed->prepared.preprocess_start_ns;
+    packet.preprocess_end_ns = completed->prepared.preprocess_end_ns;
     packet.inference_start_ns = completed->inference_start_ns;
     packet.inference_end_ns = completed->inference_end_ns;
+    packet.rknn_input_submit_ns = completed->rknn_timing.input_submit_ns;
+    packet.rknn_output_bind_ns = completed->rknn_timing.output_bind_ns;
+    packet.rknn_run_ns = completed->rknn_timing.run_ns;
+    packet.rknn_output_get_ns = completed->rknn_timing.output_get_ns;
+    packet.rknn_output_release_ns = completed->rknn_timing.output_release_ns;
+    packet.rknn_total_ns = completed->rknn_timing.total_ns;
 
     bool postprocess_ok = false;
     try {
         packet.result = postprocessor_->Process(*outputs, packet.transform);
         packet.postprocess_end_ns = MonotonicNowNs();
+        packet.generated_timestamp_ns = packet.postprocess_end_ns;
+        if (packet.identity.capture_timestamp_ns > 0 &&
+            packet.generated_timestamp_ns >=
+                packet.identity.capture_timestamp_ns) {
+            packet.result_age_ns =
+                packet.generated_timestamp_ns -
+                packet.identity.capture_timestamp_ns;
+        }
         postprocess_ok = true;
     } catch (const std::exception& error) {
         std::cerr << "postprocess failed: " << error.what() << '\n';
@@ -696,9 +759,22 @@ bool InferencePipeline::ProcessCompletedFrame(
         return false;
     }
 
+    RecordCompletedTiming(packet);
     postprocess_success_count_.fetch_add(
         1U, std::memory_order_relaxed);
-    result_sink_->Publish(std::move(packet));
+    try {
+        result_sink_->Publish(std::move(packet));
+    } catch (const std::exception& error) {
+        std::cerr << "result sink failed: " << error.what() << '\n';
+        result_publish_failure_count_.fetch_add(
+            1U, std::memory_order_relaxed);
+        return false;
+    } catch (...) {
+        std::cerr << "result sink failed with unknown exception\n";
+        result_publish_failure_count_.fetch_add(
+            1U, std::memory_order_relaxed);
+        return false;
+    }
     return true;
 }
 
@@ -708,6 +784,9 @@ void InferencePipeline::PostprocessLoop() noexcept {
         while (completed_frames_.WaitPop(&completed)) {
             (void)ProcessCompletedFrame(&completed);
         }
+        split_final_completed_frame_drained_.store(
+            completed_frames_.Snapshot().current_size == 0U,
+            std::memory_order_release);
     } catch (const std::exception& error) {
         std::cerr << "postprocess thread failed: " << error.what() << '\n';
         SignalFailure();
@@ -721,11 +800,6 @@ void InferencePipeline::NpuPostprocessLoop() noexcept {
     PreparedFrame prepared;
     try {
         while (prepared_frames_.WaitPop(&prepared)) {
-            if (!running_.load(std::memory_order_acquire)) {
-                (void)free_input_slots_.TryPush(prepared.input_slot_index);
-                continue;
-            }
-
             std::size_t output_slot_index = 0U;
             if (!free_output_slots_.WaitPop(&output_slot_index)) {
                 (void)free_input_slots_.TryPush(prepared.input_slot_index);
@@ -737,7 +811,9 @@ void InferencePipeline::NpuPostprocessLoop() noexcept {
             completed.prepared = prepared;
             completed.inference_start_ns = MonotonicNowNs();
             const bool ok = engine_->Run(
-                prepared.input_slot_index, output_slot_index);
+                prepared.input_slot_index,
+                output_slot_index,
+                &completed.rknn_timing);
             completed.inference_end_ns = MonotonicNowNs();
             (void)free_input_slots_.TryPush(prepared.input_slot_index);
 
@@ -761,10 +837,39 @@ void InferencePipeline::NpuPostprocessLoop() noexcept {
     }
 }
 
+void InferencePipeline::RecordCompletedTiming(
+    const PerceptionPacket& packet) noexcept {
+    input_slot_wait_.Add(
+        packet.input_slot_acquired_ns - packet.input_slot_wait_start_ns);
+    latest_frame_queue_wait_.Add(
+        packet.latest_frame_dequeue_ns - packet.inference_enqueue_ns);
+    capture_to_preprocess_start_.Add(
+        packet.preprocess_start_ns - packet.identity.capture_timestamp_ns);
+    preprocess_duration_.Add(
+        packet.preprocess_end_ns - packet.preprocess_start_ns);
+    rknn_input_submit_.Add(packet.rknn_input_submit_ns);
+    rknn_output_bind_.Add(packet.rknn_output_bind_ns);
+    rknn_bind_total_.Add(
+        packet.rknn_input_submit_ns + packet.rknn_output_bind_ns);
+    rknn_run_.Add(packet.rknn_run_ns);
+    rknn_output_get_.Add(packet.rknn_output_get_ns);
+    rknn_output_release_.Add(packet.rknn_output_release_ns);
+    rknn_total_.Add(packet.rknn_total_ns);
+    postprocess_duration_.Add(
+        packet.postprocess_end_ns - packet.inference_end_ns);
+    capture_to_result_.Add(
+        packet.postprocess_end_ns - packet.identity.capture_timestamp_ns);
+    result_age_.Add(packet.result_age_ns);
+}
+
 PipelineStatsSnapshot InferencePipeline::stats() const noexcept {
     PipelineStatsSnapshot snapshot;
     snapshot.captured_frames =
         captured_count_.load(std::memory_order_relaxed);
+    snapshot.camera_timeouts =
+        camera_timeout_count_.load(std::memory_order_relaxed);
+    snapshot.camera_wakes =
+        camera_wake_count_.load(std::memory_order_relaxed);
     snapshot.driver_dropped_frames =
         driver_dropped_count_.load(std::memory_order_relaxed);
     snapshot.replaced_waiting_frames =
@@ -781,6 +886,8 @@ PipelineStatsSnapshot InferencePipeline::stats() const noexcept {
         postprocess_success_count_.load(std::memory_order_relaxed);
     snapshot.postprocess_failures =
         postprocess_failure_count_.load(std::memory_order_relaxed);
+    snapshot.result_publish_failures =
+        result_publish_failure_count_.load(std::memory_order_relaxed);
     snapshot.requeue_failures =
         requeue_failure_count_.load(std::memory_order_relaxed);
     snapshot.dmabuf_sync_failures =
@@ -797,7 +904,45 @@ PipelineStatsSnapshot InferencePipeline::stats() const noexcept {
         video_packets_dropped_count_.load(std::memory_order_relaxed);
     snapshot.video_sink_failures =
         video_sink_failure_count_.load(std::memory_order_relaxed);
+
+    snapshot.camera_buffer_count_at_start =
+        camera_buffer_count_at_start_.load(std::memory_order_relaxed);
+    snapshot.camera_outstanding_before_stop =
+        camera_outstanding_before_stop_.load(std::memory_order_relaxed);
+    snapshot.broker_outstanding_frames_before_camera_stop =
+        broker_outstanding_frames_before_stop_.load(std::memory_order_relaxed);
+    snapshot.broker_outstanding_leases_before_camera_stop =
+        broker_outstanding_leases_before_stop_.load(std::memory_order_relaxed);
+    snapshot.fatal_error = fatal_error_.load(std::memory_order_relaxed);
+    snapshot.graceful_shutdown_completed =
+        graceful_shutdown_completed_.load(std::memory_order_relaxed);
+    snapshot.split_final_completed_frame_drained =
+        config_.topology == InferenceThreadTopology::FUSED_NPU_POSTPROCESS ||
+        split_final_completed_frame_drained_.load(std::memory_order_relaxed);
     snapshot.topology = config_.topology;
+
+    snapshot.captured_frame_queue = captured_frames_.Snapshot();
+    snapshot.prepared_frame_queue = prepared_frames_.Snapshot();
+    snapshot.completed_frame_queue = completed_frames_.Snapshot();
+    snapshot.video_frame_queue = video_frames_.Snapshot();
+    snapshot.encoded_packet_queue = encoded_packets_.Snapshot();
+
+    snapshot.timing.input_slot_wait = input_slot_wait_.Snapshot();
+    snapshot.timing.latest_frame_queue_wait =
+        latest_frame_queue_wait_.Snapshot();
+    snapshot.timing.capture_to_preprocess_start =
+        capture_to_preprocess_start_.Snapshot();
+    snapshot.timing.preprocess = preprocess_duration_.Snapshot();
+    snapshot.timing.rknn_input_submit = rknn_input_submit_.Snapshot();
+    snapshot.timing.rknn_output_bind = rknn_output_bind_.Snapshot();
+    snapshot.timing.rknn_bind_total = rknn_bind_total_.Snapshot();
+    snapshot.timing.rknn_run = rknn_run_.Snapshot();
+    snapshot.timing.rknn_output_get = rknn_output_get_.Snapshot();
+    snapshot.timing.rknn_output_release = rknn_output_release_.Snapshot();
+    snapshot.timing.rknn_total = rknn_total_.Snapshot();
+    snapshot.timing.postprocess = postprocess_duration_.Snapshot();
+    snapshot.timing.capture_to_result = capture_to_result_.Snapshot();
+    snapshot.timing.result_age = result_age_.Snapshot();
     return snapshot;
 }
 

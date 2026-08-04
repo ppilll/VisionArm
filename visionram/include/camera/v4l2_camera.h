@@ -72,7 +72,7 @@ public:
         return format_;
     }
 
-    [[nodiscard]] uint32_t outstanding_buffers() const noexcept {
+    [[nodiscard]] uint32_t outstanding_buffers() const noexcept override {
         return outstanding_buffers_.load(std::memory_order_acquire);
     }
 

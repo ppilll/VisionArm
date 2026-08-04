@@ -89,9 +89,12 @@ if(VISIONARM_BUILD_RUNTIME)
 
     set(VISIONARM_RUNTIME_SOURCES
         src/memory/dma_heap_buffer.cpp
+        src/metrics/latency_accumulator.cpp
+        src/control/mock_control_sink.cpp
         src/inference/rknn_engine.cpp
         src/postprocess/yolov8_top1_postprocessor.cpp
         src/pipeline/inference_pipeline.cpp
+        src/pipeline/target_state_machine.cpp
         src/preprocess/letterbox_geometry.cpp
         src/video/h265_file_sink.cpp
         src/video/nv12_mpp_layout.cpp)
@@ -277,6 +280,22 @@ if(VISIONARM_BUILD_RUNTIME AND VISIONARM_BUILD_ACCELERATION_TOOLS)
                 -Wpedantic
                 -Wconversion
                 -Wshadow)
+
+        add_executable(
+            vision_pipeline_r7_r8_probe
+            tools/vision_pipeline_r7_r8_probe.cpp)
+        target_link_libraries(
+            vision_pipeline_r7_r8_probe
+            PRIVATE
+                visionarm::pipeline)
+        target_compile_options(
+            vision_pipeline_r7_r8_probe
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Wconversion
+                -Wshadow)
     endif()
 endif()
 
@@ -335,13 +354,48 @@ if(VISIONARM_BUILD_TESTS)
         PRIVATE
             visionarm::contract)
 
+
+    add_executable(
+        target_state_machine_test
+        tests/target_state_machine_test.cpp
+        src/pipeline/target_state_machine.cpp
+        src/control/mock_control_sink.cpp
+        src/common/monotonic_clock.cpp)
+    target_link_libraries(
+        target_state_machine_test
+        PRIVATE
+            visionarm::contract
+            Threads::Threads)
+
+    add_executable(
+        latency_accumulator_test
+        tests/latency_accumulator_test.cpp
+        src/metrics/latency_accumulator.cpp)
+    target_link_libraries(
+        latency_accumulator_test
+        PRIVATE
+            visionarm::contract
+            Threads::Threads)
+
+    add_executable(
+        bounded_queue_metrics_test
+        tests/bounded_queue_metrics_test.cpp)
+    target_link_libraries(
+        bounded_queue_metrics_test
+        PRIVATE
+            visionarm::contract
+            Threads::Threads)
+
     foreach(test_target IN ITEMS
             capture_buffer_contract_test
             capture_buffer_broker_test
             v4l2_dmabuf_contract_test
             letterbox_geometry_test
             nv12_mpp_layout_test
-            yolov8_top1_postprocessor_test)
+            yolov8_top1_postprocessor_test
+            target_state_machine_test
+            latency_accumulator_test
+            bounded_queue_metrics_test)
         target_compile_options(
             ${test_target}
             PRIVATE
@@ -378,5 +432,21 @@ if(VISIONARM_BUILD_TESTS)
         letterbox_geometry_test
         nv12_mpp_layout_test
         yolov8_top1_postprocessor_test
+        PROPERTIES TIMEOUT 15)
+
+    add_test(
+        NAME target_state_machine_test
+        COMMAND target_state_machine_test)
+    add_test(
+        NAME latency_accumulator_test
+        COMMAND latency_accumulator_test)
+    add_test(
+        NAME bounded_queue_metrics_test
+        COMMAND bounded_queue_metrics_test)
+
+    set_tests_properties(
+        target_state_machine_test
+        latency_accumulator_test
+        bounded_queue_metrics_test
         PROPERTIES TIMEOUT 15)
 endif()

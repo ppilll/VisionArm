@@ -35,6 +35,7 @@ public:
     virtual void Stop() noexcept = 0;
 
     [[nodiscard]] virtual std::size_t buffer_count() const noexcept = 0;
+    [[nodiscard]] virtual uint32_t outstanding_buffers() const noexcept = 0;
 };
 
 }  // namespace visionarm

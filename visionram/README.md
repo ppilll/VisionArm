@@ -233,3 +233,47 @@ physical closed loop
 ```
 
 `H265FileSink` is the minimal R5 validation sink. A later TCP sink can implement the same `IEncodedPacketSink` interface without changing Camera, MPP or inference ownership.
+
+## V4-R7 / V4-R8 finalized low-latency pipeline
+
+The validated production candidate is:
+
+```text
+Camera / MPP video main path: complete 30/60 FPS encoding
+Inference side path: fused NPU + postprocess
+RKNN input slots: 1
+RKNN output slots: 1
+Pending inference queue: capacity 1, latest frame wins
+Preprocess policy: wait for the input slot first, then consume the latest frame
+Model input: RGB UINT8 NHWC 960x544 centered letterbox
+```
+
+R7 adds the stateful control contract:
+
+```text
+NO_TARGET
+CANDIDATE
+DETECTED
+LOST
+INVALID
+STALE
+```
+
+Only `DETECTED` produces `ControlResult::valid=true`. Every other state zeros
+all dx/dy values, so a temporary miss or stale result cannot reuse an old motor
+command.
+
+R8 adds bounded queue metrics, RKNN bind/run breakdown, input-slot wait,
+latest-frame wait, capture-to-result/result-age distributions, pre-STREAMOFF
+Camera/Broker snapshots, RSS sampling, and staged producer-owned shutdown.
+The split topology remains available only as a regression path; its NPU thread
+now closes the completed queue after draining so the final result is always
+postprocessed before shutdown completes.
+
+See:
+
+```text
+docs/v4_r7_state_and_control.md
+docs/v4_r8_metrics_and_stability.md
+docs/v4_r7_r8_operation_guide.md
+```

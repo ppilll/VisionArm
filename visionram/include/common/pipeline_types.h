@@ -15,13 +15,11 @@ enum class TimestampOrigin {
 };
 
 struct FrameIdentity {
-    // Monotonically increasing for each Start() on the same camera object.
-    // It disambiguates frame_id reuse across streaming restarts.
     uint64_t capture_session_id = 0;
     uint64_t frame_id = 0;
     uint32_t v4l2_sequence = 0;
 
-    // Normalized timestamps use CLOCK_MONOTONIC nanoseconds.
+    // All normalized timestamps use CLOCK_MONOTONIC nanoseconds.
     int64_t capture_timestamp_ns = 0;
     int64_t dequeue_timestamp_ns = 0;
 
@@ -32,48 +30,26 @@ struct FrameIdentity {
 };
 
 struct CapturePlaneView {
-    // CPU-visible address of the first valid byte for this plane. This is a
-    // non-owning view into one dequeued V4L2 MMAP buffer.
     void* mapped_address = nullptr;
-
-    // DMA-BUF fd exported through VIDIOC_EXPBUF. V4L2Camera owns the fd;
-    // consumers must never close it.
     int dma_fd = -1;
-
-    // Offset of the valid image data within the exported DMA-BUF allocation.
     std::size_t data_offset = 0;
-
-    // Number of valid bytes after data_offset, as reported by DQBUF.
     std::size_t bytes_used = 0;
-
-    // Total size of the mmap/exported allocation for this plane.
     std::size_t allocation_length = 0;
-
     uint32_t stride = 0;
     uint32_t size_image = 0;
 };
 
 struct CaptureFrameView {
     FrameIdentity identity;
-
-    // The V4L2 buffer remains dequeued while this view is in use. In the
-    // current compatibility pipeline the caller eventually calls Requeue();
-    // after R1 only the camera owner thread may requeue a broker completion.
     uint32_t buffer_index = 0;
-
     int width = 0;
     int height = 0;
     uint32_t pixel_format = 0;
     uint32_t buffer_flags = 0;
-
     uint32_t plane_count = 0;
     std::array<CapturePlaneView, kMaxFramePlanes> planes{};
 };
 
-// Temporary compatibility aliases for the pre-R1 inference pipeline. New R0/R1
-// code must use CapturePlaneView and CaptureFrameView to make the non-owning
-// lifetime explicit. Remove these aliases only after the R1 migration is
-// complete and all callers use FrameLease.
 using FramePlane = CapturePlaneView;
 using FramePacket = CaptureFrameView;
 
@@ -90,9 +66,6 @@ struct PreprocessTransform {
     int model_width = 0;
     int model_height = 0;
 
-    // Forward mapping:
-    // model_x = source_x * scale_x + pad_left
-    // model_y = source_y * scale_y + pad_top
     float scale_x = 0.0F;
     float scale_y = 0.0F;
     float uniform_scale = 0.0F;
@@ -112,21 +85,15 @@ enum class ModelInputMemoryLayout {
 
 struct ModelInputBufferView {
     std::size_t slot_index = 0;
-
-    // cpu_address and dma_fd describe the same persistent RKNN input slot.
-    // CPU/OpenCV writes cpu_address; an RGA implementation imports dma_fd.
     void* cpu_address = nullptr;
     int dma_fd = -1;
     std::size_t dma_offset = 0;
     std::size_t capacity_bytes = 0;
-
     int width = 0;
     int height = 0;
     int channels = 3;
     ModelInputMemoryLayout memory_layout =
         ModelInputMemoryLayout::RGB_UINT8_NHWC;
-
-    // Bytes between two rows. Zero means tightly packed width*channels.
     uint32_t row_stride_bytes = 0;
 };
 
@@ -135,11 +102,26 @@ enum class CoordinateSpace {
     ORIGINAL_FRAME,
 };
 
-enum class TargetState {
-    NO_TARGET,
+enum class TargetState : uint8_t {
+    NO_TARGET = 0,
+    CANDIDATE,
     DETECTED,
+    LOST,
     INVALID,
+    STALE,
 };
+
+[[nodiscard]] inline const char* TargetStateName(TargetState state) noexcept {
+    switch (state) {
+        case TargetState::NO_TARGET: return "NO_TARGET";
+        case TargetState::CANDIDATE: return "CANDIDATE";
+        case TargetState::DETECTED: return "DETECTED";
+        case TargetState::LOST: return "LOST";
+        case TargetState::INVALID: return "INVALID";
+        case TargetState::STALE: return "STALE";
+    }
+    return "UNKNOWN";
+}
 
 struct Detection {
     float x1 = 0.0F;
@@ -203,11 +185,25 @@ struct PerceptionPacket {
     FrameIdentity identity;
     PreprocessTransform transform;
 
+    int64_t inference_enqueue_ns = 0;
+    int64_t input_slot_wait_start_ns = 0;
+    int64_t input_slot_acquired_ns = 0;
+    int64_t latest_frame_dequeue_ns = 0;
     int64_t preprocess_start_ns = 0;
     int64_t preprocess_end_ns = 0;
     int64_t inference_start_ns = 0;
     int64_t inference_end_ns = 0;
     int64_t postprocess_end_ns = 0;
+    int64_t generated_timestamp_ns = 0;
+    int64_t result_age_ns = 0;
+
+    // RKNN API timing for this frame.
+    int64_t rknn_input_submit_ns = 0;
+    int64_t rknn_output_bind_ns = 0;
+    int64_t rknn_run_ns = 0;
+    int64_t rknn_output_get_ns = 0;
+    int64_t rknn_output_release_ns = 0;
+    int64_t rknn_total_ns = 0;
 
     PostprocessResult result;
 };
@@ -228,15 +224,57 @@ enum class InferenceThreadTopology {
     return "unknown";
 }
 
+struct LatencyDistributionSnapshot {
+    uint64_t total_samples = 0;
+    uint64_t retained_samples = 0;
+    bool truncated = false;
+    double mean_ms = 0.0;
+    double p50_ms = 0.0;
+    double p95_ms = 0.0;
+    double p99_ms = 0.0;
+    double maximum_ms = 0.0;
+};
+
+struct PipelineTimingSnapshot {
+    LatencyDistributionSnapshot input_slot_wait;
+    LatencyDistributionSnapshot latest_frame_queue_wait;
+    LatencyDistributionSnapshot capture_to_preprocess_start;
+    LatencyDistributionSnapshot preprocess;
+    LatencyDistributionSnapshot rknn_input_submit;
+    LatencyDistributionSnapshot rknn_output_bind;
+    LatencyDistributionSnapshot rknn_bind_total;
+    LatencyDistributionSnapshot rknn_run;
+    LatencyDistributionSnapshot rknn_output_get;
+    LatencyDistributionSnapshot rknn_output_release;
+    LatencyDistributionSnapshot rknn_total;
+    LatencyDistributionSnapshot postprocess;
+    LatencyDistributionSnapshot capture_to_result;
+    LatencyDistributionSnapshot result_age;
+};
+
+struct QueueStatsSnapshot {
+    uint64_t pushed = 0;
+    uint64_t popped = 0;
+    uint64_t replaced_oldest = 0;
+    std::size_t current_size = 0;
+    std::size_t high_watermark = 0;
+    std::size_t capacity = 0;
+    bool stopped = false;
+};
+
 struct PipelineStatsSnapshot {
     uint64_t captured_frames = 0;
+    uint64_t camera_timeouts = 0;
+    uint64_t camera_wakes = 0;
     uint64_t driver_dropped_frames = 0;
     uint64_t replaced_waiting_frames = 0;
     uint64_t skipped_no_input_slot = 0;
     uint64_t preprocess_failures = 0;
     uint64_t inference_successes = 0;
     uint64_t inference_failures = 0;
+    uint64_t postprocess_successes = 0;
     uint64_t postprocess_failures = 0;
+    uint64_t result_publish_failures = 0;
     uint64_t requeue_failures = 0;
     uint64_t dmabuf_sync_failures = 0;
 
@@ -246,9 +284,25 @@ struct PipelineStatsSnapshot {
     uint64_t video_packets_enqueued = 0;
     uint64_t video_packets_dropped = 0;
     uint64_t video_sink_failures = 0;
-    uint64_t postprocess_successes = 0;
+
+    std::size_t camera_buffer_count_at_start = 0;
+    uint32_t camera_outstanding_before_stop = 0;
+    uint64_t broker_outstanding_frames_before_camera_stop = 0;
+    uint64_t broker_outstanding_leases_before_camera_stop = 0;
+
+    bool fatal_error = false;
+    bool graceful_shutdown_completed = false;
+    bool split_final_completed_frame_drained = false;
+
     InferenceThreadTopology topology =
         InferenceThreadTopology::FUSED_NPU_POSTPROCESS;
+
+    QueueStatsSnapshot captured_frame_queue;
+    QueueStatsSnapshot prepared_frame_queue;
+    QueueStatsSnapshot completed_frame_queue;
+    QueueStatsSnapshot video_frame_queue;
+    QueueStatsSnapshot encoded_packet_queue;
+    PipelineTimingSnapshot timing;
 };
 
 }  // namespace visionarm

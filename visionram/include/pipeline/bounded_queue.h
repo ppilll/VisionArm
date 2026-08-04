@@ -1,5 +1,8 @@
 #pragma once
 
+#include "common/pipeline_types.h"
+
+#include <algorithm>
 #include <condition_variable>
 #include <cstddef>
 #include <mutex>
@@ -10,8 +13,9 @@
 
 namespace visionarm {
 
-// Fixed-capacity ring queue. Storage is allocated once in the constructor;
-// push/pop operations do not allocate linked-list nodes.
+// Fixed-capacity ring queue. Storage is allocated once in the constructor.
+// Stop() closes the producer side and wakes all waiters; queued items remain
+// drainable until the queue becomes empty.
 template <typename T>
 class BoundedQueue final {
 public:
@@ -50,8 +54,7 @@ public:
     }
 
     // Keeps the newest item. When full, removes the oldest queued item and
-    // returns it through evicted so the caller can release external resources
-    // such as a dequeued V4L2 buffer.
+    // returns it through evicted so the caller can release external resources.
     bool PushLatest(T value, std::optional<T>* evicted) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (evicted != nullptr) {
@@ -72,6 +75,7 @@ public:
             slots_[head_].reset();
             head_ = Next(head_);
             --size_;
+            ++replaced_oldest_;
         }
 
         PushUnlocked(std::move(value));
@@ -92,8 +96,6 @@ public:
         return true;
     }
 
-    // After Stop(), queued items are still drained. Returns false only when the
-    // queue is both stopped and empty.
     bool WaitPop(T* value) {
         if (value == nullptr) {
             return false;
@@ -129,6 +131,19 @@ public:
         return slots_.size();
     }
 
+    [[nodiscard]] QueueStatsSnapshot Snapshot() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        QueueStatsSnapshot snapshot;
+        snapshot.pushed = pushed_;
+        snapshot.popped = popped_;
+        snapshot.replaced_oldest = replaced_oldest_;
+        snapshot.current_size = size_;
+        snapshot.high_watermark = high_watermark_;
+        snapshot.capacity = slots_.size();
+        snapshot.stopped = stopped_;
+        return snapshot;
+    }
+
 private:
     [[nodiscard]] std::size_t Next(std::size_t index) const noexcept {
         return (index + 1U) % slots_.size();
@@ -138,6 +153,8 @@ private:
         slots_[tail_] = std::move(value);
         tail_ = Next(tail_);
         ++size_;
+        ++pushed_;
+        high_watermark_ = std::max(high_watermark_, size_);
     }
 
     void PopUnlocked(T* value) {
@@ -145,12 +162,17 @@ private:
         slots_[head_].reset();
         head_ = Next(head_);
         --size_;
+        ++popped_;
     }
 
     std::vector<std::optional<T>> slots_;
     std::size_t head_ = 0U;
     std::size_t tail_ = 0U;
     std::size_t size_ = 0U;
+    std::size_t high_watermark_ = 0U;
+    uint64_t pushed_ = 0U;
+    uint64_t popped_ = 0U;
+    uint64_t replaced_oldest_ = 0U;
     bool stopped_ = false;
 
     mutable std::mutex mutex_;
