@@ -44,7 +44,7 @@ CaptureBufferBroker
                             |
                     latest-frame queue
                             |
-                    RGA NV12 -> RGB letterbox
+                    RGA NV12 -> RGB aspect-preserving centered letterbox (960x544)
                             |
                     DMA32 RKNN input slot
                             |
@@ -161,6 +161,7 @@ capture_buffer_broker_test
 v4l2_dmabuf_contract_test
 letterbox_geometry_test
 nv12_mpp_layout_test
+yolov8_top1_postprocessor_test
 ```
 
 ## 7. RK3588 build
@@ -214,7 +215,7 @@ ffprobe -v error -f hevc \
   reports/v4_r5/fused_1x1.h265
 ```
 
-See `docs/v4_r5_r6_operation_guide.md` for the full test matrix, 10-minute stability procedure, failure criteria and final topology decision rule.
+See `MIGRATION_960x544.md` for the 960x544 single-class model migration, build, probe and validation procedure.
 
 ## 9. Current boundary
 

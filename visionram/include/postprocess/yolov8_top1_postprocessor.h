@@ -9,9 +9,9 @@ namespace visionarm {
 
 struct YoloV8Top1DecoderConfig {
     int model_width = 960;
-    int model_height = 960;
-    int class_count = 2;
-    int target_class_id = 1;
+    int model_height = 544;
+    int class_count = 1;
+    int target_class_id = 0;
     int dfl_bins = 16;
     float confidence_threshold = 0.25F;
     bool class_scores_are_logits = false;

@@ -8,6 +8,7 @@
 #include "video/mpp_h265_encoder.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -27,6 +28,11 @@
 namespace {
 
 std::atomic<bool> g_stop{false};
+
+constexpr int kModelWidth = 960;
+constexpr int kModelHeight = 544;
+constexpr int kClassCount = 1;
+constexpr int kTargetClassId = 0;
 
 void SignalHandler(int) {
     g_stop.store(true, std::memory_order_release);
@@ -234,6 +240,81 @@ int DeriveVerticalStride(
     return static_cast<int>(numerator / denominator);
 }
 
+
+const rknn_tensor_attr& FindOutputAttribute(
+    const visionarm::RknnModelInfo& model_info,
+    uint32_t tensor_index) {
+
+    const auto iterator = std::find_if(
+        model_info.output_attributes.begin(),
+        model_info.output_attributes.end(),
+        [tensor_index](const rknn_tensor_attr& attr) {
+            return attr.index == tensor_index;
+        });
+    if (iterator == model_info.output_attributes.end()) {
+        throw std::runtime_error(
+            "RKNN model is missing output tensor index " +
+            std::to_string(tensor_index));
+    }
+    return *iterator;
+}
+
+void ValidateOutputAttribute(
+    const visionarm::RknnModelInfo& model_info,
+    uint32_t tensor_index,
+    uint32_t channels,
+    uint32_t height,
+    uint32_t width) {
+
+    const rknn_tensor_attr& attr =
+        FindOutputAttribute(model_info, tensor_index);
+    if (attr.n_dims != 4U ||
+        attr.dims[0] != 1U ||
+        attr.dims[1] != channels ||
+        attr.dims[2] != height ||
+        attr.dims[3] != width ||
+        attr.fmt != RKNN_TENSOR_NCHW ||
+        attr.type != RKNN_TENSOR_INT8 ||
+        attr.qnt_type != RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC) {
+        throw std::runtime_error(
+            "RKNN output tensor " + std::to_string(tensor_index) +
+            " does not match the expected INT8 NCHW YOLOv8 contract");
+    }
+}
+
+void ValidateYoloV8OutputContract(
+    const visionarm::RknnModelInfo& model_info) {
+
+    if (model_info.output_attributes.size() != 9U) {
+        throw std::runtime_error(
+            "the optimized YOLOv8 RKNN model must expose exactly 9 outputs");
+    }
+
+    constexpr std::array<uint32_t, 3> strides{8U, 16U, 32U};
+    constexpr std::array<uint32_t, 3> box_indices{0U, 3U, 6U};
+    constexpr std::array<uint32_t, 3> class_indices{1U, 4U, 7U};
+    constexpr std::array<uint32_t, 3> sum_indices{2U, 5U, 8U};
+
+    for (std::size_t branch = 0U; branch < strides.size(); ++branch) {
+        const uint32_t stride = strides[branch];
+        const uint32_t height =
+            static_cast<uint32_t>(kModelHeight) / stride;
+        const uint32_t width =
+            static_cast<uint32_t>(kModelWidth) / stride;
+
+        ValidateOutputAttribute(
+            model_info, box_indices[branch], 64U, height, width);
+        ValidateOutputAttribute(
+            model_info,
+            class_indices[branch],
+            static_cast<uint32_t>(kClassCount),
+            height,
+            width);
+        ValidateOutputAttribute(
+            model_info, sum_indices[branch], 1U, height, width);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -274,20 +355,49 @@ int main(int argc, char** argv) {
 
         visionarm::RknnEngine engine;
         engine.Initialize(engine_config);
+        if (engine.input_shape().width !=
+                static_cast<uint32_t>(kModelWidth) ||
+            engine.input_shape().height !=
+                static_cast<uint32_t>(kModelHeight)) {
+            throw std::runtime_error(
+                "vision_pipeline_r5_r6_probe requires an RKNN model with "
+                "logical image shape width=960, height=544");
+        }
+        ValidateYoloV8OutputContract(engine.model_info());
 
         visionarm::RgaLetterboxConfig rga_config;
         rga_config.model_width = static_cast<int>(engine.input_shape().width);
         rga_config.model_height = static_cast<int>(engine.input_shape().height);
         rga_config.padding_value = 114U;
+        // Production geometry is always aspect-preserving centered letterbox.
+        // For 16:9 input and a 960x544 model this gives 960x540 plus 2 rows
+        // of padding at the top and bottom.
+        rga_config.resize_policy.stretch_matching_source_aspect_ratio = false;
         rga_config.max_source_buffers = camera.buffer_count();
         rga_config.max_destination_slots = engine.input_slot_count();
+
+        visionarm::LetterboxGeometry expected_geometry;
+        visionarm::PreprocessTransform expected_transform;
+        if (!visionarm::ComputeModelResizeGeometry(
+                static_cast<int>(camera_format.width),
+                static_cast<int>(camera_format.height),
+                rga_config.model_width,
+                rga_config.model_height,
+                rga_config.resize_policy,
+                &expected_geometry,
+                &expected_transform) ||
+            !expected_transform.letterbox) {
+            throw std::runtime_error(
+                "failed to derive aspect-preserving centered letterbox geometry");
+        }
+
         visionarm::RgaLetterboxPreprocessor preprocessor(rga_config);
 
         visionarm::YoloV8Top1PostprocessConfig postprocess_config;
         postprocess_config.decoder.model_width = rga_config.model_width;
         postprocess_config.decoder.model_height = rga_config.model_height;
-        postprocess_config.decoder.class_count = 2;
-        postprocess_config.decoder.target_class_id = 1;
+        postprocess_config.decoder.class_count = kClassCount;
+        postprocess_config.decoder.target_class_id = kTargetClassId;
         postprocess_config.decoder.dfl_bins = 16;
         postprocess_config.decoder.confidence_threshold = options.confidence;
         visionarm::YoloV8Top1Postprocessor postprocessor(postprocess_config);
@@ -356,6 +466,8 @@ int main(int argc, char** argv) {
         pipeline.Stop();
 
         const visionarm::PipelineStatsSnapshot stats = pipeline.stats();
+        const visionarm::RgaPreprocessorSnapshot rga_stats =
+            preprocessor.snapshot();
         const visionarm::CaptureBufferBrokerSnapshot broker_stats =
             broker.GetSnapshot();
         const visionarm::VideoEncoderSnapshot encoder_stats =
@@ -378,6 +490,22 @@ int main(int argc, char** argv) {
         report << "topology="
                << visionarm::InferenceThreadTopologyName(stats.topology)
                << '\n';
+        report << "model_input_width=" << rga_config.model_width << '\n';
+        report << "model_input_height=" << rga_config.model_height << '\n';
+        report << "preprocess_mode=aspect_preserving_centered_letterbox\n";
+        report << "preprocess_resized_width="
+               << expected_geometry.resized_width << '\n';
+        report << "preprocess_resized_height="
+               << expected_geometry.resized_height << '\n';
+        report << "preprocess_pad_left=" << expected_geometry.pad_left << '\n';
+        report << "preprocess_pad_top=" << expected_geometry.pad_top << '\n';
+        report << "preprocess_pad_right=" << expected_geometry.pad_right << '\n';
+        report << "preprocess_pad_bottom=" << expected_geometry.pad_bottom << '\n';
+        report << "preprocess_scale=" << expected_geometry.scale << '\n';
+        report << "decoder_class_count=" << kClassCount << '\n';
+        report << "decoder_target_class_id=" << kTargetClassId << '\n';
+        report << "model_output_count="
+               << engine.model_info().output_attributes.size() << '\n';
         report << "captured_frames=" << stats.captured_frames << '\n';
         report << "video_queue_capacity=" << options.video_queue << '\n';
         report << "video_frames_encoded=" << stats.video_frames_encoded << '\n';
@@ -387,6 +515,15 @@ int main(int argc, char** argv) {
         report << "video_sink_failures=" << stats.video_sink_failures << '\n';
         report << "inference_successes=" << stats.inference_successes << '\n';
         report << "postprocess_successes=" << stats.postprocess_successes << '\n';
+        report << "rga_process_calls=" << rga_stats.process_calls << '\n';
+        report << "rga_process_successes="
+               << rga_stats.process_successes << '\n';
+        report << "rga_direct_resize_successes="
+               << rga_stats.direct_resize_successes << '\n';
+        report << "rga_letterbox_successes="
+               << rga_stats.letterbox_successes << '\n';
+        report << "rga_fill_operations="
+               << rga_stats.fill_operations << '\n';
         report << "replaced_waiting_frames=" << stats.replaced_waiting_frames << '\n';
         report << "skipped_no_input_slot=" << stats.skipped_no_input_slot << '\n';
         report << "broker_outstanding_frames="

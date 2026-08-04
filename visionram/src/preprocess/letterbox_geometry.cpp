@@ -2,8 +2,29 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace visionarm {
+namespace {
+
+[[nodiscard]] bool MatchesAspectRatio(
+    int width,
+    int height,
+    int aspect_width,
+    int aspect_height) noexcept {
+
+    if (width <= 0 || height <= 0 ||
+        aspect_width <= 0 || aspect_height <= 0) {
+        return false;
+    }
+
+    return static_cast<int64_t>(width) *
+               static_cast<int64_t>(aspect_height) ==
+           static_cast<int64_t>(height) *
+               static_cast<int64_t>(aspect_width);
+}
+
+}  // namespace
 
 bool ComputeCenteredLetterbox(
     int source_width,
@@ -66,6 +87,76 @@ bool ComputeCenteredLetterbox(
         true,
     };
     return true;
+}
+
+bool ComputeModelResizeGeometry(
+    int source_width,
+    int source_height,
+    int destination_width,
+    int destination_height,
+    const ResizeGeometryPolicy& policy,
+    LetterboxGeometry* geometry,
+    PreprocessTransform* transform) noexcept {
+
+    if (source_width <= 0 || source_height <= 0 ||
+        destination_width <= 0 || destination_height <= 0 ||
+        geometry == nullptr || transform == nullptr) {
+        return false;
+    }
+
+    if (policy.stretch_matching_source_aspect_ratio) {
+        if (policy.source_aspect_width <= 0 ||
+            policy.source_aspect_height <= 0) {
+            return false;
+        }
+
+        if (MatchesAspectRatio(
+                source_width,
+                source_height,
+                policy.source_aspect_width,
+                policy.source_aspect_height)) {
+            const float scale_x =
+                static_cast<float>(destination_width) /
+                static_cast<float>(source_width);
+            const float scale_y =
+                static_cast<float>(destination_height) /
+                static_cast<float>(source_height);
+
+            *geometry = LetterboxGeometry{
+                destination_width,
+                destination_height,
+                0,
+                0,
+                0,
+                0,
+                0.0F,
+            };
+
+            *transform = PreprocessTransform{
+                source_width,
+                source_height,
+                destination_width,
+                destination_height,
+                scale_x,
+                scale_y,
+                0.0F,
+                0,
+                0,
+                0,
+                0,
+                false,
+            };
+            return true;
+        }
+    }
+
+    return ComputeCenteredLetterbox(
+        source_width,
+        source_height,
+        destination_width,
+        destination_height,
+        geometry,
+        transform);
 }
 
 }  // namespace visionarm

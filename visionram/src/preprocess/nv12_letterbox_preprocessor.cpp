@@ -117,8 +117,11 @@ Nv12LetterboxPreprocessor::Nv12LetterboxPreprocessor(
     Nv12LetterboxConfig config)
     : config_(config) {
 
-    if (config_.model_width <= 0 || config_.model_height <= 0) {
-        throw std::invalid_argument("model dimensions must be positive");
+    if (config_.model_width <= 0 || config_.model_height <= 0 ||
+        (config_.resize_policy.stretch_matching_source_aspect_ratio &&
+         (config_.resize_policy.source_aspect_width <= 0 ||
+          config_.resize_policy.source_aspect_height <= 0))) {
+        throw std::invalid_argument("invalid NV12 resize configuration");
     }
 }
 
@@ -173,24 +176,16 @@ bool Nv12LetterboxPreprocessor::Process(
 
         LetterboxGeometry geometry;
         PreprocessTransform computed_transform;
-        if (!ComputeCenteredLetterbox(
+        if (!ComputeModelResizeGeometry(
                 frame.width,
                 frame.height,
                 config_.model_width,
                 config_.model_height,
+                config_.resize_policy,
                 &geometry,
                 &computed_transform)) {
             return false;
         }
-
-        cv::Mat resized_rgb;
-        cv::resize(
-            source_rgb,
-            resized_rgb,
-            cv::Size(geometry.resized_width, geometry.resized_height),
-            0.0,
-            0.0,
-            cv::INTER_LINEAR);
 
         cv::Mat model_rgb(
             destination.height,
@@ -198,16 +193,35 @@ bool Nv12LetterboxPreprocessor::Process(
             CV_8UC3,
             destination.cpu_address,
             row_stride);
-        model_rgb.setTo(cv::Scalar(
-            config_.padding_value,
-            config_.padding_value,
-            config_.padding_value));
 
-        resized_rgb.copyTo(model_rgb(cv::Rect(
-            geometry.pad_left,
-            geometry.pad_top,
-            geometry.resized_width,
-            geometry.resized_height)));
+        if (!computed_transform.letterbox) {
+            cv::resize(
+                source_rgb,
+                model_rgb,
+                cv::Size(destination.width, destination.height),
+                0.0,
+                0.0,
+                cv::INTER_LINEAR);
+        } else {
+            cv::Mat resized_rgb;
+            cv::resize(
+                source_rgb,
+                resized_rgb,
+                cv::Size(geometry.resized_width, geometry.resized_height),
+                0.0,
+                0.0,
+                cv::INTER_LINEAR);
+
+            model_rgb.setTo(cv::Scalar(
+                config_.padding_value,
+                config_.padding_value,
+                config_.padding_value));
+            resized_rgb.copyTo(model_rgb(cv::Rect(
+                geometry.pad_left,
+                geometry.pad_top,
+                geometry.resized_width,
+                geometry.resized_height)));
+        }
 
         *transform = computed_transform;
         return true;

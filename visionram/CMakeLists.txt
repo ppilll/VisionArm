@@ -325,12 +325,23 @@ if(VISIONARM_BUILD_TESTS)
         PRIVATE
             visionarm::contract)
 
+    add_executable(
+        yolov8_top1_postprocessor_test
+        tests/yolov8_top1_postprocessor_test.cpp
+        src/postprocess/yolov8_top1_postprocessor.cpp
+        src/preprocess/letterbox_geometry.cpp)
+    target_link_libraries(
+        yolov8_top1_postprocessor_test
+        PRIVATE
+            visionarm::contract)
+
     foreach(test_target IN ITEMS
             capture_buffer_contract_test
             capture_buffer_broker_test
             v4l2_dmabuf_contract_test
             letterbox_geometry_test
-            nv12_mpp_layout_test)
+            nv12_mpp_layout_test
+            yolov8_top1_postprocessor_test)
         target_compile_options(
             ${test_target}
             PRIVATE
@@ -356,6 +367,9 @@ if(VISIONARM_BUILD_TESTS)
     add_test(
         NAME nv12_mpp_layout_test
         COMMAND nv12_mpp_layout_test)
+    add_test(
+        NAME yolov8_top1_postprocessor_test
+        COMMAND yolov8_top1_postprocessor_test)
 
     set_tests_properties(
         capture_buffer_contract_test
@@ -363,5 +377,6 @@ if(VISIONARM_BUILD_TESTS)
         v4l2_dmabuf_contract_test
         letterbox_geometry_test
         nv12_mpp_layout_test
+        yolov8_top1_postprocessor_test
         PROPERTIES TIMEOUT 15)
 endif()

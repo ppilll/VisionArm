@@ -35,7 +35,10 @@ RgaLetterboxPreprocessor::RgaLetterboxPreprocessor(
 
     if (config_.model_width <= 0 || config_.model_height <= 0 ||
         config_.max_source_buffers == 0U ||
-        config_.max_destination_slots == 0U) {
+        config_.max_destination_slots == 0U ||
+        (config_.resize_policy.stretch_matching_source_aspect_ratio &&
+         (config_.resize_policy.source_aspect_width <= 0 ||
+          config_.resize_policy.source_aspect_height <= 0))) {
         throw std::invalid_argument("invalid RGA letterbox configuration");
     }
 }
@@ -214,11 +217,12 @@ bool RgaLetterboxPreprocessor::Process(
 
     LetterboxGeometry geometry;
     PreprocessTransform computed_transform;
-    if (!ComputeCenteredLetterbox(
+    if (!ComputeModelResizeGeometry(
             source.width,
             source.height,
             destination.width,
             destination.height,
+            config_.resize_policy,
             &geometry,
             &computed_transform)) {
         ++snapshot_.validation_failures;
@@ -252,20 +256,26 @@ bool RgaLetterboxPreprocessor::Process(
         &source_buffer,
         static_cast<IM_COLOR_SPACE_MODE>(config_.color_space_mode));
 
-    const im_rect full_destination{
-        0,
-        0,
-        destination.width,
-        destination.height,
-    };
-    const IM_STATUS fill_status = imfill_t(
-        destination_buffer,
-        full_destination,
-        PaddingColor(config_.padding_value),
-        1);
-    if (!RgaSucceeded(fill_status)) {
-        ++snapshot_.fill_failures;
-        return false;
+    const bool has_padding =
+        geometry.pad_left != 0 || geometry.pad_top != 0 ||
+        geometry.pad_right != 0 || geometry.pad_bottom != 0;
+    if (has_padding) {
+        const im_rect full_destination{
+            0,
+            0,
+            destination.width,
+            destination.height,
+        };
+        const IM_STATUS fill_status = imfill_t(
+            destination_buffer,
+            full_destination,
+            PaddingColor(config_.padding_value),
+            1);
+        if (!RgaSucceeded(fill_status)) {
+            ++snapshot_.fill_failures;
+            return false;
+        }
+        ++snapshot_.fill_operations;
     }
 
     const im_rect source_rect{0, 0, source.width, source.height};
@@ -297,6 +307,11 @@ bool RgaLetterboxPreprocessor::Process(
 
     *transform = computed_transform;
     ++snapshot_.process_successes;
+    if (computed_transform.letterbox) {
+        ++snapshot_.letterbox_successes;
+    } else {
+        ++snapshot_.direct_resize_successes;
+    }
     return true;
 }
 

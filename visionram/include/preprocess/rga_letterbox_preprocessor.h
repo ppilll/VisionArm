@@ -1,6 +1,7 @@
 #pragma once
 
 #include "preprocess/image_preprocessor.h"
+#include "preprocess/letterbox_geometry.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -12,8 +13,9 @@ namespace visionarm {
 
 struct RgaLetterboxConfig {
     int model_width = 960;
-    int model_height = 960;
+    int model_height = 544;
     uint8_t padding_value = 114;
+    ResizeGeometryPolicy resize_policy{};
 
     // These capacities must match the already-opened V4L2 camera buffer count
     // and the initialized RKNN engine input slot count. Handles are imported
@@ -21,7 +23,7 @@ struct RgaLetterboxConfig {
     std::size_t max_source_buffers = 0U;
     std::size_t max_destination_slots = 0U;
 
-    // The current football model and OpenCV baseline use RGB with the normal
+    // The current ping-pong model and OpenCV baseline use RGB with the normal
     // limited-range NV12 conversion. Change only after an image-level parity
     // test demonstrates that the camera advertises a different colorimetry.
     int color_space_mode = IM_YUV_TO_RGB_BT601_LIMIT;
@@ -36,6 +38,9 @@ struct RgaPreprocessorSnapshot {
     uint64_t process_failures = 0U;
     uint64_t source_imports = 0U;
     uint64_t destination_imports = 0U;
+    uint64_t direct_resize_successes = 0U;
+    uint64_t letterbox_successes = 0U;
+    uint64_t fill_operations = 0U;
 };
 
 // Synchronous RGA implementation for linear, single-allocation NV12.

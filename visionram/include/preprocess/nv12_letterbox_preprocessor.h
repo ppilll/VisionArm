@@ -1,6 +1,7 @@
 #pragma once
 
 #include "preprocess/image_preprocessor.h"
+#include "preprocess/letterbox_geometry.h"
 
 #include <cstdint>
 
@@ -8,8 +9,9 @@ namespace visionarm {
 
 struct Nv12LetterboxConfig {
     int model_width = 960;
-    int model_height = 960;
+    int model_height = 544;
     uint8_t padding_value = 114;
+    ResizeGeometryPolicy resize_policy{};
 };
 
 // CPU/OpenCV fallback implementation. It consumes the V4L2 MMAP view directly
