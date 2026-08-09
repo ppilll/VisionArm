@@ -1,6 +1,10 @@
 #include "camera/capture_buffer_broker.h"
 #include "camera/v4l2_camera.h"
 #include "control/control_sink.h"
+#if defined(VISIONARM_HAS_UART_CONTROL)
+#include "control/uart_control_sink.h"
+#include "uart/uart_link.h"
+#endif
 #include "inference/rknn_engine.h"
 #include "pipeline/inference_pipeline.h"
 #include "pipeline/latest_result_store.h"
@@ -20,6 +24,8 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -35,6 +41,19 @@ constexpr int kTargetClassId = 0;
 
 void SignalHandler(int) {
     g_stop.store(true, std::memory_order_release);
+}
+
+enum class ControlBackend {
+    MOCK,
+    UART,
+};
+
+const char* ControlBackendName(ControlBackend backend) noexcept {
+    switch (backend) {
+        case ControlBackend::MOCK: return "mock";
+        case ControlBackend::UART: return "uart";
+    }
+    return "unknown";
 }
 
 struct Options {
@@ -62,6 +81,10 @@ struct Options {
     int latency_samples = 65536;
     int max_rss_growth_kb = 0;
     float confidence = 0.25F;
+    ControlBackend control_backend = ControlBackend::MOCK;
+    std::string uart_device = "/dev/ttyS3";
+    int uart_baud = 115200;
+    int uart_ready_timeout_ms = 5000;
     visionarm::InferenceThreadTopology topology =
         visionarm::InferenceThreadTopology::FUSED_NPU_POSTPROCESS;
 };
@@ -76,7 +99,9 @@ struct Options {
         << "  [--acquire-hits N] [--lost-misses N] \\\n"
         << "  [--max-result-age-ms N] [--latency-samples N] \\\n"
         << "  [--max-rss-growth-kb N] [--vertical-stride N] \\\n"
-        << "  [--input-dma-heap PATH] [--confidence F] [--report PATH]\n";
+        << "  [--input-dma-heap PATH] [--confidence F] [--report PATH] \\\n"
+        << "  [--control-backend mock|uart] [--uart-device /dev/ttyS3] \\\n"
+        << "  [--uart-baud 115200] [--uart-ready-timeout-ms 5000]\n";
     std::exit(EXIT_FAILURE);
 }
 
@@ -132,7 +157,24 @@ Options ParseOptions(int argc, char** argv) {
         else if (key == "--max-rss-growth-kb") options.max_rss_growth_kb = ParseNonnegativeInt(next(), "max RSS growth");
         else if (key == "--input-dma-heap") options.input_dma_heap = next();
         else if (key == "--confidence") options.confidence = std::stof(next());
-        else if (key == "--topology") {
+        else if (key == "--control-backend") {
+            const std::string value = next();
+            if (value == "mock") {
+                options.control_backend = ControlBackend::MOCK;
+            } else if (value == "uart") {
+                options.control_backend = ControlBackend::UART;
+            } else {
+                throw std::invalid_argument(
+                    "control backend must be mock or uart");
+            }
+        } else if (key == "--uart-device") {
+            options.uart_device = next();
+        } else if (key == "--uart-baud") {
+            options.uart_baud = ParsePositiveInt(next(), "UART baud");
+        } else if (key == "--uart-ready-timeout-ms") {
+            options.uart_ready_timeout_ms =
+                ParsePositiveInt(next(), "UART ready timeout");
+        } else if (key == "--topology") {
             const std::string value = next();
             if (value == "fused") {
                 options.topology =
@@ -154,6 +196,16 @@ Options ParseOptions(int argc, char** argv) {
         options.bitrate <= 0 || options.gop <= 0) {
         Usage(argv[0]);
     }
+    if (options.control_backend == ControlBackend::UART &&
+        options.uart_device.empty()) {
+        throw std::invalid_argument("UART device must not be empty");
+    }
+#if !defined(VISIONARM_HAS_UART_CONTROL)
+    if (options.control_backend == ControlBackend::UART) {
+        throw std::invalid_argument(
+            "this binary was built without VISIONARM_ENABLE_UART_CONTROL");
+    }
+#endif
 
     const int maximum_video_queue = options.buffers > 4
         ? options.buffers - 4
@@ -164,6 +216,27 @@ Options ParseOptions(int argc, char** argv) {
     }
     return options;
 }
+
+#if defined(VISIONARM_HAS_UART_CONTROL)
+bool WaitForUartReady(
+    visionarm::uart::UartLink& link,
+    int timeout_ms) noexcept {
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(timeout_ms);
+    while (!g_stop.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        const visionarm::uart::LinkState state = link.GetLinkState();
+        if (state == visionarm::uart::LinkState::READY) {
+            return true;
+        }
+        if (state == visionarm::uart::LinkState::FAILED) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+}
+#endif
 
 int DeriveVerticalStride(
     const visionarm::CameraFormat& format,
@@ -411,7 +484,42 @@ int main(int argc, char** argv) {
         }
 
         visionarm::LatestResultStore latest_perception;
-        visionarm::MockControlSink control_sink;
+        visionarm::MockControlSink mock_control_sink;
+        visionarm::IControlSink* selected_control_sink = &mock_control_sink;
+
+#if defined(VISIONARM_HAS_UART_CONTROL)
+        std::unique_ptr<visionarm::uart::UartLink> uart_link;
+        std::unique_ptr<visionarm::UartControlSink> uart_control_sink;
+        if (options.control_backend == ControlBackend::UART) {
+            visionarm::uart::UartLinkConfig uart_config;
+            uart_config.device_path = options.uart_device;
+            uart_config.baud_rate = static_cast<uint32_t>(options.uart_baud);
+
+            uart_link =
+                std::make_unique<visionarm::uart::UartLink>(uart_config);
+            std::string uart_error;
+            if (!uart_link->Start(&uart_error)) {
+                throw std::runtime_error(
+                    "UART Start failed: " + uart_error);
+            }
+            if (!WaitForUartReady(*uart_link, options.uart_ready_timeout_ms)) {
+                const visionarm::uart::UartModuleSnapshot failed =
+                    uart_link->GetSnapshot();
+                uart_link->Stop();
+                throw std::runtime_error(
+                    std::string("UART did not reach READY; state=") +
+                    visionarm::uart::LinkStateName(failed.state) +
+                    " last_error=" + failed.last_error);
+            }
+
+            uart_control_sink =
+                std::make_unique<visionarm::UartControlSink>(*uart_link);
+            selected_control_sink = uart_control_sink.get();
+            std::cout << "UART READY device=" << options.uart_device
+                      << " baud=" << options.uart_baud << '\n';
+        }
+#endif
+
         visionarm::TargetStateMachineConfig state_config;
         state_config.acquire_hits =
             static_cast<uint32_t>(options.acquire_hits);
@@ -420,7 +528,7 @@ int main(int argc, char** argv) {
         state_config.max_result_age_ns =
             static_cast<int64_t>(options.max_result_age_ms) * 1'000'000LL;
         visionarm::TargetStateMachine state_machine(
-            state_config, &control_sink, &latest_perception);
+            state_config, selected_control_sink, &latest_perception);
 
         visionarm::InferencePipelineConfig pipeline_config;
         pipeline_config.enable_video = true;
@@ -480,8 +588,18 @@ int main(int argc, char** argv) {
             file_sink.snapshot();
         const visionarm::TargetStateMachineSnapshot state_stats =
             state_machine.Snapshot();
-        const visionarm::MockControlSinkSnapshot control_stats =
-            control_sink.Snapshot();
+        const visionarm::MockControlSinkSnapshot mock_control_stats =
+            mock_control_sink.Snapshot();
+
+#if defined(VISIONARM_HAS_UART_CONTROL)
+        std::optional<visionarm::UartControlSinkSnapshot> uart_control_stats;
+        std::optional<visionarm::uart::UartModuleSnapshot> uart_link_stats;
+        if (options.control_backend == ControlBackend::UART) {
+            uart_control_stats = uart_control_sink->Snapshot();
+            uart_link_stats = uart_link->GetSnapshot();
+            uart_link->Stop();
+        }
+#endif
 
         std::ofstream report_file;
         std::ostream* output_stream = &std::cout;
@@ -505,6 +623,14 @@ int main(int argc, char** argv) {
         report << "acquire_hits=" << options.acquire_hits << '\n';
         report << "lost_misses=" << options.lost_misses << '\n';
         report << "max_result_age_ms=" << options.max_result_age_ms << '\n';
+        report << "control_backend="
+               << ControlBackendName(options.control_backend) << '\n';
+        if (options.control_backend == ControlBackend::UART) {
+            report << "uart_device=" << options.uart_device << '\n';
+            report << "uart_baud=" << options.uart_baud << '\n';
+            report << "uart_ready_timeout_ms="
+                   << options.uart_ready_timeout_ms << '\n';
+        }
 
         report << "captured_frames=" << stats.captured_frames << '\n';
         report << "camera_timeouts=" << stats.camera_timeouts << '\n';
@@ -582,9 +708,80 @@ int main(int argc, char** argv) {
                           static_cast<visionarm::TargetState>(index))
                    << '=' << state_stats.state_counts[index] << '\n';
         }
-        report << "control_submissions=" << control_stats.submissions << '\n';
-        report << "control_valid=" << control_stats.valid_controls << '\n';
-        report << "control_invalid=" << control_stats.invalid_controls << '\n';
+        if (options.control_backend == ControlBackend::MOCK) {
+            report << "control_submissions="
+                   << mock_control_stats.submissions << '\n';
+            report << "control_valid="
+                   << mock_control_stats.valid_controls << '\n';
+            report << "control_invalid="
+                   << mock_control_stats.invalid_controls << '\n';
+        }
+#if defined(VISIONARM_HAS_UART_CONTROL)
+        else if (uart_control_stats.has_value() &&
+                 uart_link_stats.has_value()) {
+            const auto& adapter = *uart_control_stats;
+            const auto& link = *uart_link_stats;
+            report << "uart.adapter.submissions="
+                   << adapter.metrics.submissions << '\n';
+            report << "uart.adapter.accepted="
+                   << adapter.metrics.accepted << '\n';
+            report << "uart.adapter.rejected="
+                   << adapter.metrics.rejected << '\n';
+            report << "uart.adapter.valid_inputs="
+                   << adapter.metrics.valid_inputs << '\n';
+            report << "uart.adapter.invalid_inputs="
+                   << adapter.metrics.invalid_inputs << '\n';
+            report << "uart.adapter.nonfinite_invalidations="
+                   << adapter.metrics.nonfinite_invalidations << '\n';
+            report << "uart.adapter.invalid_timestamp_invalidations="
+                   << adapter.metrics.invalid_timestamp_invalidations << '\n';
+            report << "uart.adapter.invalid_state_invalidations="
+                   << adapter.metrics.invalid_state_invalidations << '\n';
+            report << "uart.adapter.identity_truncations="
+                   << adapter.metrics.identity_truncations << '\n';
+            report << "uart.link_state_before_stop="
+                   << visionarm::uart::LinkStateName(link.state) << '\n';
+            report << "uart.peer_boot_id_valid="
+                   << (link.peer_boot_id_valid ? 1 : 0) << '\n';
+            report << "uart.peer_boot_id=" << link.peer_boot_id << '\n';
+            report << "uart.tx_bytes=" << link.metrics.tx_bytes << '\n';
+            report << "uart.rx_bytes=" << link.metrics.rx_bytes << '\n';
+            report << "uart.control_accepted="
+                   << link.metrics.control_accepted << '\n';
+            report << "uart.control_overwritten="
+                   << link.metrics.control_overwritten << '\n';
+            report << "uart.control_sent="
+                   << link.metrics.control_sent << '\n';
+            report << "uart.valid_control_sent="
+                   << link.metrics.valid_control_sent << '\n';
+            report << "uart.invalid_control_sent="
+                   << link.metrics.invalid_control_sent << '\n';
+            report << "uart.hello_ack_received="
+                   << link.metrics.hello_ack_received << '\n';
+            report << "uart.status_received="
+                   << link.metrics.status_received << '\n';
+            report << "uart.poll_errors="
+                   << link.metrics.poll_errors << '\n';
+            report << "uart.read_errors="
+                   << link.metrics.read_errors << '\n';
+            report << "uart.write_errors="
+                   << link.metrics.write_errors << '\n';
+            report << "uart.message_decode_errors="
+                   << link.metrics.message_decode_errors << '\n';
+            report << "uart.unexpected_responses="
+                   << link.metrics.unexpected_responses << '\n';
+            report << "uart.parser_crc_errors="
+                   << link.metrics.parser.crc_errors << '\n';
+            report << "uart.parser_length_errors="
+                   << link.metrics.parser.length_errors << '\n';
+            report << "uart.parser_version_errors="
+                   << link.metrics.parser.version_errors << '\n';
+            report << "uart.parser_escape_errors="
+                   << link.metrics.parser.escape_errors << '\n';
+            report << "uart.parser_oversize_errors="
+                   << link.metrics.parser.oversize_errors << '\n';
+        }
+#endif
 
         WriteQueue(report, "queue.captured", stats.captured_frame_queue);
         WriteQueue(report, "queue.prepared", stats.prepared_frame_queue);
@@ -644,6 +841,41 @@ int main(int argc, char** argv) {
             QueueBounded(stats.video_frame_queue) &&
             QueueBounded(stats.encoded_packet_queue);
 
+        bool control_ok = false;
+        if (options.control_backend == ControlBackend::MOCK) {
+            control_ok =
+                mock_control_stats.submissions == state_stats.processed_packets;
+        }
+#if defined(VISIONARM_HAS_UART_CONTROL)
+        else if (uart_control_stats.has_value() &&
+                 uart_link_stats.has_value()) {
+            const auto& adapter = *uart_control_stats;
+            const auto& link = *uart_link_stats;
+            const bool link_state_ok =
+                link.state == visionarm::uart::LinkState::READY ||
+                link.state == visionarm::uart::LinkState::DEGRADED;
+            control_ok =
+                adapter.metrics.submissions == state_stats.processed_packets &&
+                adapter.metrics.accepted == adapter.metrics.submissions &&
+                adapter.metrics.rejected == 0U &&
+                link_state_ok &&
+                link.peer_boot_id_valid &&
+                link.metrics.hello_ack_received > 0U &&
+                link.metrics.status_received > 0U &&
+                link.metrics.control_sent > 0U &&
+                link.metrics.poll_errors == 0U &&
+                link.metrics.read_errors == 0U &&
+                link.metrics.write_errors == 0U &&
+                link.metrics.message_decode_errors == 0U &&
+                link.metrics.unexpected_responses == 0U &&
+                link.metrics.parser.crc_errors == 0U &&
+                link.metrics.parser.length_errors == 0U &&
+                link.metrics.parser.version_errors == 0U &&
+                link.metrics.parser.escape_errors == 0U &&
+                link.metrics.parser.oversize_errors == 0U;
+        }
+#endif
+
         const bool passed =
             stats.captured_frames > 0U &&
             stats.video_frames_encoded > 0U &&
@@ -675,7 +907,7 @@ int main(int argc, char** argv) {
             state_stats.control_sink_failures == 0U &&
             state_stats.perception_sink_failures == 0U &&
             state_stats.invalid_timestamp_packets == 0U &&
-            control_stats.submissions == state_stats.processed_packets &&
+            control_ok &&
             queues_ok && timing_ok && rss_ok;
 
         report << "vision_pipeline_r7_r8_probe="

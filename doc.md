@@ -152,5 +152,52 @@ LD_LIBRARY_PATH=/mnt/nfs/visionarm-mpp-test/lib \
   --latency-samples 65536 \
   --max-rss-growth-kb 32768 \
   --input-dma-heap /dev/dma_heap/system-uncached-dma32
+  
 
+  cmake -S . -B build-r6-l2-board \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DVISIONARM_BUILD_RUNTIME=ON \
+  -DVISIONARM_BUILD_TESTS=OFF \
+  -DVISIONARM_BUILD_CAPTURE_TOOLS=OFF \
+  -DVISIONARM_BUILD_ACCELERATION_TOOLS=ON \
+  -DVISIONARM_ENABLE_OPENCV_PREPROCESS=OFF \
+  -DVISIONARM_ENABLE_RGA_PREPROCESS=ON \
+  -DVISIONARM_ENABLE_MPP_VIDEO=ON \
+  -DVISIONARM_ENABLE_UART_CONTROL=ON \
+  -DRKNN_INCLUDE_DIR="$RKNN_INCLUDE_DIR" \
+  -DRKNN_LIBRARY="$RKNN_LIBRARY" \
+  -DRGA_INCLUDE_DIR="$RGA_INCLUDE_DIR" \
+  -DRGA_LIBRARY="$RGA_LIBRARY" \
+  -DMPP_INCLUDE_DIR="$MPP_INCLUDE_DIR" \
+  -DMPP_LIBRARY="$MPP_LIBRARY"
 
+# run the unchanged mock backend
+sudo ./build-r6-l2-board/vision_pipeline_r7_r8_probe \
+  --device /dev/videoX \
+  --model /actual/path/model.rknn \
+  --output reports/v6/r6_l2/mock_smoke.h265 \
+  --width YOUR_WIDTH \
+  --height YOUR_HEIGHT \
+  --fps YOUR_FPS \
+  --bitrate YOUR_BITRATE \
+  --gop YOUR_GOP \
+  --duration-sec 60 \
+  --control-backend mock \
+  --report reports/v6/r6_l2/mock_smoke.txt
+
+# Run the real UART backend
+  sudo ./build-r6-l2-board/vision_pipeline_r7_r8_probe \
+  --device /dev/videoX \
+  --model /actual/path/model.rknn \
+  --output reports/v6/r6_l2/uart_smoke.h265 \
+  --width YOUR_WIDTH \
+  --height YOUR_HEIGHT \
+  --fps YOUR_FPS \
+  --bitrate YOUR_BITRATE \
+  --gop YOUR_GOP \
+  --duration-sec 60 \
+  --control-backend uart \
+  --uart-device /dev/ttyS3 \
+  --uart-baud 115200 \
+  --uart-ready-timeout-ms 5000 \
+  --report reports/v6/r6_l2/uart_smoke.txt

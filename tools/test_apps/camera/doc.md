@@ -39,9 +39,9 @@ cp -a build/v2_camera/v4l2_camera_capture /home/liu2004/nfs_dir/
   --timeout-ms 2000 \
   --output-dir reports/images/v2 \
   --save-first 3 \
-  --csv logs/v2_camera/frames.csv \
+  --csv temp/ \
   --nonblock \
-  | tee logs/v2_camera/smoke_test.log
+  | tee logs/v2_camera/smoke_test_v5.log
 
 # 用户态采集程序。
   完整执行流程

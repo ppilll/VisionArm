@@ -33,6 +33,10 @@ option(
     VISIONARM_ENABLE_MPP_VIDEO
     "Build the Rockchip MPP H.265 VideoLease branch"
     OFF)
+option(
+    VISIONARM_ENABLE_UART_CONTROL
+    "Build the integrated R6 UART control path"
+    ON)
 
 find_package(Threads REQUIRED)
 
@@ -42,6 +46,85 @@ target_include_directories(
     visionarm_contract
     INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# R6-L2 physically integrates the frozen R5 UART product sources into the V4
+# tree under include/uart and src/uart.  The library boundaries remain
+# protocol -> transport -> link -> V4 adapter; no second UART implementation
+# is introduced and no external UART sub-project is required.
+if(VISIONARM_ENABLE_UART_CONTROL)
+    add_library(visionarm_uart_protocol STATIC
+        src/uart/protocol_frame.cpp
+        src/uart/protocol_messages.cpp
+        src/uart/protocol_reliable.cpp)
+    add_library(visionarm::uart_protocol ALIAS visionarm_uart_protocol)
+    target_include_directories(
+        visionarm_uart_protocol
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_compile_options(
+        visionarm_uart_protocol
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
+
+    add_library(visionarm_uart_transport STATIC
+        src/uart/serial_port.cpp)
+    add_library(visionarm::uart_transport ALIAS visionarm_uart_transport)
+    target_include_directories(
+        visionarm_uart_transport
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_compile_options(
+        visionarm_uart_transport
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
+
+    add_library(visionarm_uart_link STATIC
+        src/uart/uart_link.cpp)
+    add_library(visionarm::uart_link ALIAS visionarm_uart_link)
+    target_include_directories(
+        visionarm_uart_link
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(
+        visionarm_uart_link
+        PUBLIC
+            visionarm::uart_protocol
+            visionarm::uart_transport
+            Threads::Threads)
+    target_compile_options(
+        visionarm_uart_link
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
+
+    add_library(visionarm_uart_adapter STATIC
+        src/control/uart_control_sink.cpp)
+    add_library(visionarm::uart_adapter ALIAS visionarm_uart_adapter)
+    target_link_libraries(
+        visionarm_uart_adapter
+        PUBLIC
+            visionarm::contract
+            visionarm::uart_link)
+    target_compile_options(
+        visionarm_uart_adapter
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
+endif()
 
 add_library(
     visionarm_capture
@@ -288,6 +371,16 @@ if(VISIONARM_BUILD_RUNTIME AND VISIONARM_BUILD_ACCELERATION_TOOLS)
             vision_pipeline_r7_r8_probe
             PRIVATE
                 visionarm::pipeline)
+        if(VISIONARM_ENABLE_UART_CONTROL)
+            target_link_libraries(
+                vision_pipeline_r7_r8_probe
+                PRIVATE
+                    visionarm::uart_adapter)
+            target_compile_definitions(
+                vision_pipeline_r7_r8_probe
+                PRIVATE
+                    VISIONARM_HAS_UART_CONTROL=1)
+        endif()
         target_compile_options(
             vision_pipeline_r7_r8_probe
             PRIVATE
@@ -386,6 +479,24 @@ if(VISIONARM_BUILD_TESTS)
             visionarm::contract
             Threads::Threads)
 
+    if(VISIONARM_ENABLE_UART_CONTROL)
+        add_executable(
+            uart_control_sink_test
+            tests/uart_control_sink_test.cpp)
+        target_link_libraries(
+            uart_control_sink_test
+            PRIVATE
+                visionarm::uart_adapter)
+        target_compile_options(
+            uart_control_sink_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Wconversion
+                -Wshadow)
+    endif()
+
     foreach(test_target IN ITEMS
             capture_buffer_contract_test
             capture_buffer_broker_test
@@ -449,4 +560,13 @@ if(VISIONARM_BUILD_TESTS)
         latency_accumulator_test
         bounded_queue_metrics_test
         PROPERTIES TIMEOUT 15)
+
+    if(VISIONARM_ENABLE_UART_CONTROL)
+        add_test(
+            NAME uart_control_sink_test
+            COMMAND uart_control_sink_test)
+        set_tests_properties(
+            uart_control_sink_test
+            PROPERTIES TIMEOUT 15)
+    endif()
 endif()
