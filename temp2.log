@@ -1,0 +1,1201 @@
+你是我的学术论文共同写作助手。我要撰写一篇关于三维点云 RWKV-like 架构的新论文。请把下面内容视为项目的完整交接信息；新的对话没有此前上下文，因此不要假设你知道任何未写在这里的信息。
+
+你的首要原则是：
+
+**不允许虚构任何方法、实验、公式、结果、文献结论或研究过程。**
+
+论文必须讲一个真实、连续、逻辑清晰的研究故事：已有方法遇到了什么本质问题 → 我们最初想到什么 → 为什么最初方案不能满足目标 → 哪个数学观察带来了关键突破 → 如何从数学公式进一步演化为可训练、高效的模型 → 哪些设计后来被实验否定 → 最终为什么保留现在这个简洁版本。
+
+不要把论文写成“我们堆了很多模块然后发现效果不错”。
+辅助我完成SCI3、4区文章的中文初次手稿的撰写。手稿位于Geo_RWKVcnV1.docx文件内。目前手稿完成了1.引言和2.相关工作部分(你可以参考这部分内容，但如果你认为内容与你后续写作不连续，允许调整)。你现在需要帮助我完成3.Method、4	Experiments部分的手稿撰写。
+生成一份新的手稿内容Geo_RWKVcnV2.docx(注意手稿中应当保留插图的位置(即引用位置1-4章内)，但不具体去绘制插图，生成一份Picture_caption.txt在文件夹下用于我后续去根据你的说明绘制插图)
+实验结果部分位于/exp/Parameste_exp.xlsx内。注意手稿中应当只使用v1m5(作为实验结果)、v1m5_test_1_1、v1m5_test_1_2、v1m5_test_1_3、v1m5_test_1_4、v1m5_test_1_5(作为消融实验部分，具体消融内容在下文中具体解释)，
+其余实验仅用于你理解我们论文模型，不放入正文，如果还有你认为需要添加的实验,生成一份Pending_supplementary_experiments.txt用于我后续补充实验，需要说明为什么需要这个实验，以及具体实验内容。
+模型代码位于/models下。(只包含网络架构，不含其他处理阶段内容，用于你理解我们文章模型具体细节)(包含主体分类模型v1m5,主体消融V1m5_test_1以及各消融config,分割模型v1m5—seg)
+在写作过程中有任何你需要额外引用的文章,请占位引用，并生成citation.txt包含被引文章在手稿中的编号以及名称(也可直接添加到References)，在引用前请务必注意文章真实性。
+---
+
+# 1. 论文暂定研究对象
+
+模型暂称：
+
+GeoVoxelRWKV / VoxelL1WKV
+
+名称目前不是最终论文标题，撰稿时不要擅自声称这是正式名称。
+
+研究对象是三维点云分类中的 RWKV-like 建模。
+
+我们的目标并不是简单把 RWKV 代码搬到点云上，也不是追求绝对 SOTA，而是研究：
+
+**能否从 RWKV 的指数衰减加权机制出发，构造一种真正由三维几何关系驱动、无需人为点序列排序，并且仍具有高效计算结构的空间 WKV。**
+
+---
+
+# 2. 必须先理解的研究背景
+
+撰写论文前请检索并阅读原始论文，不要依赖二手博客。
+
+至少包括：
+
+1. RWKV: Reinventing RNNs for the Transformer Era
+   arXiv:2305.13048 / EMNLP 2023
+
+2. PointRWKV: Efficient RWKV-Like Model for Hierarchical Point Cloud Learning
+   arXiv:2405.15214 / AAAI 2025
+
+3. PointMamba: A Simple State Space Model for Point Cloud Analysis
+   arXiv:2402.10739 / NeurIPS 2024
+
+4. Mamba3D: Enhancing Local Features for 3D Point Cloud Analysis via State Space Model
+   arXiv:2404.14966
+
+5. Efficient RWKV-based Representation Learning for 3D Point Clouds
+   arXiv:2606.10395
+   这是 2026 年出现的较新工作，撰稿时必须按照 concurrent/recent work 谨慎处理，不能忽略，更不能无依据声称我们早于它提出某个相同思想。
+
+6. ScanObjectNN 原论文和官方数据集仓库。
+
+已有研究给我们提供的真实背景是：
+
+* RWKV 本质上起源于序列建模；
+* PointRWKV 为适配点云，加入 modified matrix-valued WKV、动态递推、局部近邻图以及多尺度框架；
+* PointMamba 使用空间填充曲线处理点 token 的序列化问题；
+* Mamba3D 认为直接把序列 SSM 用于点云不能充分处理局部几何，因此增加 Local Norm Pooling 等适配；
+* 2026 年的 P-RWKV 同样把 RWKV 缺乏有效局部几何和空间依赖建模作为需要解决的问题之一。
+
+这些可以作为 Motivation 的外部依据。
+
+但不要写成“所有现有方法都失败”或者“已有方法无法建模三维几何”。
+
+正确表述应该是：
+
+**现有方法通常需要通过排序、局部图、局部增强模块或额外空间感知机制，将原本为序列设计的状态模型适配到无序三维点云。**
+
+---
+
+# 3. 我们真正发现的核心问题
+
+原始 RWKV 的一个关键权重形式可以写成：
+
+wkv_t =
+[
+Σ_{i<t} exp(-(t-i-1)w+k_i) ⊙ v_i
+
+* exp(u+k_t) ⊙ v_t
+  ]
+  /
+  [
+  Σ_{i<t} exp(-(t-i-1)w+k_i)
+* exp(u+k_t)
+  ]
+
+这里：
+
+exp(-(t-i-1)w)
+
+描述的是**序列索引距离**。
+
+其递推之所以成立，本质上是因为：
+
+# exp(-(t-i)w)
+
+exp(-w) exp(-(t-i-1)w)
+
+也就是所有历史项在向下一时刻移动时都乘同一个衰减系数。
+
+于是历史状态可以压缩成：
+
+a_t = rho a_{t-1} + exp(k_t)v_t
+
+b_t = rho b_{t-1} + exp(k_t)
+
+其中：
+
+rho = exp(-w)。
+
+这个结构非常适合一维序列。
+
+但是三维点云没有天然的“第 t 个点”和“第 t-1 个点”。
+
+两个 patch token 是否接近，应主要由：
+
+p_i,p_j∈R³
+
+的几何关系决定，而不是它们在一个人工序列中的索引距离。
+
+这是我们开始重新设计 WKV 的真正出发点。
+
+---
+
+# 4. 我们最初想到的方案：直接使用三维距离
+
+最自然的想法是把：
+
+exp(-(t-i-1)w)
+
+改成由三维距离控制的核，例如：
+
+# K(p_i,p_j)
+
+exp(-alpha ||p_i-p_j||²)
+
+或者一般形式：
+
+exp(-w d_{ij})。
+
+这样 WKV 可以写成：
+
+A_i =
+Σ_j K(p_i,p_j) exp(k_j)v_j
+
+B_i =
+Σ_j K(p_i,p_j) exp(k_j)
+
+WKV_i=A_i/B_i。
+
+这个思路在几何意义上很自然：
+
+距离近的 token 权重大，距离远的 token 权重小。
+
+但是我们随后发现了关键问题：
+
+对于任意三维欧氏距离：
+
+K(p_t,p_i)
+
+一般不存在统一系数 c_t，使：
+
+# K(p_t,p_i)
+
+c_t K(p_{t-1},p_i)
+
+对所有历史 i 同时成立。
+
+因此不能再像原始 RWKV 一样使用一个固定大小状态：
+
+a_t=c_ta_{t-1}+x_t
+
+精确递推。
+
+如果直接构造完整距离矩阵：
+
+D∈R^(N×N)
+
+虽然距离可以预计算并跨 block 复用，但每一层仍然需要执行：
+
+KX
+
+其复杂度依然具有 N² 项。
+
+---
+
+# 5. 我们考虑过但没有采用的方向：随机核特征
+
+理论上 Gaussian kernel 可以通过低秩/随机特征近似：
+
+K(p_i,p_j)
+≈
+phi(p_i)^T phi(p_j)
+
+从而重新利用结合律降低复杂度。
+
+我们讨论过 Random Fourier Features、Taylor/Hermite 展开和 Nyström 一类方案。
+
+但这不是最终论文的方法。
+
+原因不是这些方法无效，而是：
+
+1. 它们通常引入近似误差；
+2. 需要额外特征维度；
+3. 使 RWKV 原有的简单指数递推结构不再明显；
+4. 我们希望找到一个更加直接、可精确计算的几何结构。
+
+论文不要攻击随机特征方法，只需要说明：
+
+**我们进一步询问：是否存在一种三维距离定义，使几何核本身重新获得 RWKV 所需的递推结构，而不依赖核近似？**
+
+这是故事中的关键转折。
+
+---
+
+# 6. 核心数学观察：规则体素 + Manhattan 指数核
+
+我们将 patch center 映射到规则体素网格。
+
+token i 对应整数体素坐标：
+
+g_i=(x_i,y_i,z_i)。
+
+设三个方向的体素物理尺寸分别为：
+
+h_x,h_y,h_z。
+
+定义加权 Manhattan 距离：
+
+# d_{ij}
+
+h_x|x_i-x_j|
++
+h_y|y_i-y_j|
++
+h_z|z_i-z_j|。
+
+然后采用指数空间核：
+
+# K(i,j)
+
+exp(-beta d_{ij})。
+
+利用：
+
+exp(a+b+c)=exp(a)exp(b)exp(c)
+
+可严格得到：
+
+# K(i,j)
+
+rho_x^|x_i-x_j|
+rho_y^|y_i-y_j|
+rho_z^|z_i-z_j|
+
+其中：
+
+rho_x=exp(-beta_x h_x)
+
+rho_y=exp(-beta_y h_y)
+
+rho_z=exp(-beta_z h_z)。
+
+因此三维核严格可分离：
+
+K_3D = K_x K_y K_z。
+
+这不是随机特征近似，也不是低秩近似，而是核本身的精确结构。
+
+这是论文最核心的创新逻辑。
+
+---
+
+# 7. 为什么单轴又重新获得 RWKV 式递推
+
+对一维网格：
+
+Y_n =
+Σ_m rho^|n-m| X_m。
+
+定义正向状态：
+
+F_n =
+Σ_{m≤n} rho^(n-m) X_m。
+
+则：
+
+F_n=X_n+rho F_{n-1}。
+
+反向同理：
+
+B_n=X_n+rho B_{n+1}。
+
+最终：
+
+Y_n=F_n+B_n-X_n。
+
+所以每一个坐标轴上的指数几何核都重新具有原始 RWKV 指数衰减所依赖的一阶递推结构。
+
+三维情况下只需要依次沿：
+
+x → y → z
+
+执行上述对称指数滤波。
+
+由于核可分离：
+
+K_3D=K_z∘K_y∘K_x
+
+结果与完整三维 Manhattan 指数核严格对应。
+
+理论计算复杂度关于完整体素数量：
+
+M=X_gY_gZ_g
+
+为：
+
+O(MC)
+
+乘固定的三个空间轴扫描。
+
+必须注意：
+
+这不是无条件的 O(NC)。
+
+如果完整体素网格 M 远大于非空 token 数 N，则计算量依赖 M。
+
+论文必须准确写：
+
+**linear in the number of grid voxels**
+
+或在 M=O(N) 的设置下讨论与 token 数同阶的复杂度。
+
+不要错误声称任何稀疏场景下都是严格 O(N)。
+
+---
+
+# 8. 最终 Voxel-WKV
+
+输入 patch token：
+
+X∈R^(B×N×C)。
+
+采用多头结构，每个 head 的 key 是一个标量：
+
+k_i^h∈R
+
+而 value 是：
+
+v_i^h∈R^D。
+
+定义正源权重：
+
+z_i^h=exp(k_i^h)。
+
+则空间 WKV 为：
+
+# A_i^h
+
+Σ_j K_h(i,j) z_j^h v_j^h
+
+# B_i^h
+
+Σ_j K_h(i,j) z_j^h
+
+# WKV_i^h
+
+A_i^h/(B_i^h+epsilon)。
+
+再使用 receptance：
+
+# O_i^h
+
+sigmoid(r_i^h)⊙WKV_i^h。
+
+所有 head 拼接以后执行归一化和线性输出投影。
+
+这个设计保留了原始 WKV 中几个重要概念：
+
+* positive key weight；
+* normalized numerator/denominator；
+* receptance gate；
+* learnable self preference；
+
+但把一维时间衰减换成了三维空间指数核。
+
+不要声称它与某一版本 RWKV 完全代数等价。
+
+更准确的表述是：
+
+**a geometry-aware reformulation inspired by normalized WKV.**
+
+---
+
+# 9. 分子和分母的联合计算
+
+直接计算需要分别传播：
+
+Numerator:
+z_i v_i
+
+Denominator:
+z_i。
+
+由于空间滤波是线性算子，可以把二者拼接：
+
+S_i =
+[z_iv_i || z_i]。
+
+然后只执行一次：
+
+scatter
+→ 3D separable filtering
+→ gather。
+
+每个 head 的扫描宽度因此为：
+
+D+1
+
+而不是运行两套独立空间传播。
+
+这是一个重要工程优化，可以写入 Method/Efficiency，但不要把它夸大成主要数学创新。
+
+---
+
+# 10. 为什么 key 改成每 head 标量
+
+原始逐通道 key 会使 denominator 也是 D 维：
+
+B_i∈R^D。
+
+为了进一步降低空间传播宽度，我们令每个 head 共享一个标量 key：
+
+k_i^h∈R。
+
+于是：
+
+Numerator width = D
+
+Denominator width = 1
+
+总传播宽度：
+
+D+1。
+
+这种设计更加接近一个 head 使用统一空间权重去聚合 D 维 value。
+
+这是实际模型设计的一部分。
+
+---
+
+# 11. 多 token 落入同一体素
+
+多个 token 可以被映射到同一体素。
+
+对于只依赖体素坐标的核：
+
+Σ_i K(g_t,g_i)z_iv_i
+
+可以严格按体素重新分组为：
+
+Σ_g K(g_t,g)
+[
+Σ_{i:g_i=g}z_iv_i
+]。
+
+因此使用 scatter-add：
+
+P_g=
+Σ_{i:g_i=g}z_iv_i
+
+并不是任意选择的 pooling，而是原始求和公式的代数分组。
+
+但是不同体素内 token 数不同会产生 density bias。
+
+因此定义：
+
+m_g=n_g^(-gamma)
+
+并使用：
+
+P_g=
+m_g Σ z_iv_i
+
+Q_g=
+m_g Σ z_i。
+
+其中：
+
+gamma=0：sum；
+
+gamma=1：mean；
+
+中间值：部分密度补偿。
+
+当前实现支持 learnable gamma。
+
+---
+
+# 12. Self bonus
+
+RWKV 中当前 token 有额外 self/time-first bonus u。
+
+空间体素核本身已经会给当前 token 一个权重，因此实现时需要把原有 self coefficient 替换为 exp(u)。
+
+存在 density normalization 时，原来的当前 token 系数是 token_scale，因此 correction 实际为：
+
+exp(u)-token_scale。
+
+这个修正同时加入 numerator 和 denominator。
+
+这是代码正确性的重要细节。
+
+---
+
+# 13. 为什么最终删除了 BQE/token shift
+
+早期我们参考 PointRWKV/RWKV 思想讨论过 token shift/BQE。
+
+后来决定最终模型不使用序列 token shift。
+
+理由是：
+
+1. 点云不存在自然 token 顺序；
+2. 序列 shift 会重新引入排列顺序依赖；
+3. circular shift 甚至可能把没有几何邻接关系的 token 混合；
+4. 当前 Voxel-WKV 已经显式通过三维体素距离完成局部到全局空间传播。
+
+因此模型职责被明确分开：
+
+Spatial-Mixing：
+负责所有跨 token 的几何信息传播。
+
+Channel-Mixing：
+负责单个 token 内部的通道变换。
+
+---
+
+# 14. Shift-Free Channel-Mixing
+
+当前 Channel-Mixing 不执行空间 shift。
+
+公式为：
+
+H=ReLU(W_kX)^2
+
+V=W_vH
+
+R=sigmoid(W_rX)
+
+Y=W_o(R⊙V)。
+
+它保持 RWKV-style gated FFN 的思想，但删除了序列预混合。
+
+论文不要声称 Channel-Mixing 自身具有空间建模能力。
+
+空间信息已经由前一个 Voxel-WKV residual 注入当前 token。
+
+---
+
+# 15. 为什么最终不使用 LGM
+
+PointRWKV 通过局部近邻图分支来补充局部几何。
+
+我们曾认真考虑是否也需要类似 LGM。
+
+最终主模型没有加入。
+
+原因包括：
+
+1. Voxel-WKV 的核已经直接基于三维距离，近邻天然得到更高权重；
+2. 每 block 重新 KNN/graph aggregation 会引入额外开销；
+3. 我们希望检验纯空间 WKV 本身是否已经能同时承担局部—全局传播；
+4. 后续实验加入六邻域高频残差和 Depthwise 3D Conv 都没有提高最终准确率。
+
+因此“没有 LGM”不是未经验证的假设，而是经历了设计与消融以后保留下来的简洁结构。
+
+但不要写：
+
+“LGM 是没有必要的。”
+
+过于绝对。
+
+更合适：
+
+**our experiments suggest that additional local graph or convolutional branches are not required for the considered classification setting.**
+
+---
+
+# 16. Patch tokenization
+
+模型并不是完全没有 KNN。
+
+输入阶段仍然使用一次：
+
+FPS + KNN grouping
+
+构造局部 point patches。
+
+之后用 PointNet-style embedding 得到 patch token。
+
+所以论文必须区分：
+
+“no graph/KNN inside encoder blocks”
+
+和：
+
+“the entire network does not use KNN”。
+
+后者是错误的。
+
+---
+
+# 17. Serial 架构到 Hierarchical 架构的演化
+
+最初为了干净验证 Voxel-WKV 本身，我们采用：
+
+Serial-12
+
+即：
+
+12 个连续 block
+相同 token resolution。
+
+实验得到：
+
+v1m4 baseline Serial-12：
+
+Params = 10.938095M
+FLOPs = 2.715G
+
+OBJ-BG = 90.877792
+OBJ-ONLY = 89.328743。
+
+随后尝试：
+
+Hierarchical [4,4,4]
+
+三级 token 数：
+
+[128,64,32]
+
+grid：
+
+[8³,6³,4³]
+
+channel：
+
+[384,384,384]
+
+heads：
+
+[8,8,8]。
+
+stage transition 通过 FPS 下采样中心和对应 token feature，不在 transition 中额外执行 KNN graph aggregation。
+
+早期 p4 得到：
+
+Params = 11.400431M
+FLOPs = 1.597G
+
+OBJ-BG = 90.361443
+OBJ-ONLY = 89.672974。
+
+虽然 OBJ-BG 略低，但 FLOPs 从：
+
+2.715G → 1.597G
+
+下降约 41%。
+
+这证明层次化结构是一个非常好的 efficiency–accuracy tradeoff。
+
+后来使用 v1m5 代码重新运行 p4 reproduction，在相同总体架构下获得：
+
+OBJ-BG = 92.082611
+OBJ-ONLY = 90.705681
+
+Params = 11.400431M
+FLOPs = 1.597G。
+
+这是当前最好的模型结果，也是目前论文主模型候选。
+
+
+---
+
+
+
+---
+
+# 18. Dense filtering 与递推实现的关系
+
+数学上，一维空间核：
+
+rho^|i-j|
+
+可以通过：
+
+F_i=X_i+rho F_{i-1}
+
+B_i=X_i+rho B_{i+1}
+
+在线性复杂度下精确计算。
+
+但是当前 GPU 实现最终采用的是针对短网格轴的 dense kernel：
+
+G_ab=rho^|a-b|
+
+Y=GX。
+
+理由来自真实实验：
+
+我们尝试过 accelerated parallel scan。
+
+虽然 accelerated scan 理论 FLOPs 更低，但需要：
+
+* permutation；
+* contiguous memory conversion；
+* 构造完整 gate tensor；
+* GPU cache/memory traffic；
+* 多个 kernel launch。
+
+对于目前：
+
+4、6、8 等很短的体素轴，
+
+dense small-matrix multiplication 实际训练速度反而更快。
+
+因此当前默认 backend：
+
+symmetric_exponential_filter_1d_dense。
+
+论文必须谨慎区分：
+
+### 数学算法复杂度
+
+可利用递推实现 O(MC)。
+
+### 当前高效 GPU 实现
+
+短轴情况下采用显式小型 dense kernel matrix multiplication。
+
+因此不要把当前代码的实际 FLOPs 与理论递推 FLOPs混为一谈。
+
+这是论文中非常值得讨论的“theoretical efficiency vs hardware efficiency”问题。
+
+---
+
+# 19. 当前模型的真实实验结果
+
+## v1m5
+
+| Model                             |  Params/M | FLOPs/G |    OBJ-BG |  OBJ-ONLY |
+| --------------------------------- | --------: | ------: | --------: | --------: |
+| p4 reproduction / current best    | 11.400431 |   1.597 | 92.082611 | 90.705681 |
+| weighted fusion + head-scale init | 11.138290 |   1.597 | 91.049919 | 90.189323 |
+| + light boundary jitter           | 11.138290 |   1.597 | 91.049919 | 90.189323 |
+| + fixed density gamma=0.75        | 11.138194 |   1.597 | 91.049919 | 90.189323 |
+
+---
+
+# 20. 消融实验部分
+我们在ScanObjectNN PB-T50-RS数据集上使用相同超参数测试以下内容
+
+消融模型见/models/Geo_RWKv1m5_test_1.py 以及各消融使用的测试config扳机finetune_scan_hardest_Geo_RWKv1m5_test_1_x.yaml
+实验结果部分参见/exp/Parameste_exp.xlsx内
+
+A1. Spatial-Mixing 是否真正有效
+A2. “距离核”是否真正重要
+A3. WKV 归一化是否重要
+A4. 三维各向异性衰减
+A5. β 是否需要学习
+
+# 21. 对 PointRWKV 结果的态度
+
+我们曾发现：
+
+PointRWKV 官方论文报告的部分结果在一些其他 RWKV 点云研究或自己的观察中似乎难以复现。
+
+但这不是足够证据证明 PointRWKV 的结果“有问题”。
+
+论文绝对不能写：
+
+“PointRWKV results are incorrect.”
+
+除非我们完成严格官方代码复现并有充分证据。
+
+可以做的是：
+
+1. 表格中引用其 official reported results；
+2. 明确标注来源；
+3. 如果自己复现，则另列 reproduced result；
+4. 在正文中谨慎说明不同 implementation/training protocol 下可能存在 reproducibility gap。
+
+不要攻击其他论文。
+
+---
+
+# 22. 我们真正应该讲的论文故事
+
+Introduction 不要从“我们提出了三个模块”开始。
+
+推荐按照以下逻辑展开。
+
+## 第一幕：高效全局建模
+
+Transformer 为点云提供强大的全局建模能力，但 pairwise attention 带来 quadratic complexity。
+
+RWKV/Mamba 等序列模型提供了另一条路线：
+
+通过递推状态实现高效长程建模。
+
+因此越来越多研究尝试把 sequence/state-space architecture 引入点云。
+
+## 第二幕：三维点云不是一维序列
+
+问题在于：
+
+RWKV 的指数衰减：
+
+exp(-Δt w)
+
+天然定义在序列距离 Δt 上。
+
+点云却是无序三维集合。
+
+人工排序可以产生一个序列，但：
+
+**sequence proximity is not equivalent to 3D geometric proximity.**
+
+已有工作因此需要：
+
+* point reordering；
+* space-filling curve；
+* local graph；
+* local pooling；
+* spatial enhancement。
+
+这里引用 PointMamba、PointRWKV、Mamba3D、P-RWKV 等工作作为证据。
+
+## 第三幕：一个自然但困难的想法
+
+既然问题出在时间距离：
+
+为什么不直接把 temporal decay 换成真正的 3D distance？
+
+于是得到：
+
+exp(-alpha d(p_i,p_j))。
+
+但是任意 pairwise geometry destroys the simple RWKV recurrence：
+
+不同历史 token 对新的 query point 有不同的衰减变化。
+
+因此要么：
+
+1. 显式构造 N² pairwise kernel；
+2. 使用 low-rank/random approximation。
+
+这都会偏离我们希望保留的简单精确 RWKV structure。
+
+## 第四幕：关键观察
+
+如果先把点 token 映射到规则体素，并使用 weighted Manhattan exponential distance：
+
+d=
+h_x|Δx|+
+h_y|Δy|+
+h_z|Δz|，
+
+那么：
+
+# exp(-d)
+
+exp(-h_x|Δx|)
+exp(-h_y|Δy|)
+exp(-h_z|Δz|)。
+
+即三维核严格分离为三个一维指数核。
+
+而每个一维指数核又恰好满足 RWKV 式的一阶递推。
+
+因此：
+
+**voxelization is not merely a discretization trick; it creates a coordinate structure under which a geometry-aware WKV kernel becomes exactly separable and recursively computable.**
+
+这是整篇论文故事最核心的一句话。
+
+## 第五幕：从公式到实际网络
+
+然后自然引出：
+
+* head-wise scalar key；
+* normalized numerator/denominator；
+* combined D+1 propagation；
+* cached voxel layout；
+* density correction；
+* self bonus；
+* shift-free Channel-Mixing。
+
+这些都是从核心公式向实际模型推导出来的，而不是独立堆叠模块。
+
+## 第六幕：简洁性
+
+由于 Spatial-Mixing 已经直接编码三维距离，我们最终发现：
+
+额外 local graph、multi-kernel、6-neighbor branch、3D convolution 并未带来改善。
+
+因此最终 backbone 反而更加简单。
+
+随后层次化 token reduction 在基本维持准确率的同时显著降低计算量。
+
+论文最后形成的思想是：
+
+**Rather than adapting a sequence operator to geometry through additional local modules, we redesign the WKV decay itself as a geometric operator.**
+
+这句话非常适合作为 Introduction/Method 的核心思想，但最终文字可以进一步润色。
+
+---
+
+# 23. 建议贡献点
+
+暂时可以写成三点，不要超过四点。
+
+贡献 1：
+
+提出一种 geometry-aware Voxel-WKV，把 RWKV 中依赖一维序列距离的指数衰减重新定义在三维体素空间中。
+
+贡献 2：
+
+通过 weighted Manhattan exponential kernel 的严格可分离性，把三维全局空间加权分解为三个一维指数滤波，并保留精确递推结构，不需要显式 token-pair attention 或随机核近似。
+
+贡献 3：
+
+设计高效实现，包括 head-wise scalar key、numerator/denominator joint propagation、stage-wise cached voxel layout，以及 shift-free RWKV block；结合层次架构获得较好的 accuracy–efficiency tradeoff。
+
+实验贡献可以作为第三点或第四点：
+
+在多个点云 benchmark 上验证方法，并通过消融说明核心空间 WKV 的作用以及额外复杂局部模块并非始终必要。
+
+如果目前只有 ScanObjectNN 数据，不要提前写“多个 benchmark”。
+
+---
+
+# 24. 不允许出现的夸大表述
+
+除非后续实验真正证明，否则禁止写：
+
+“state-of-the-art”
+
+“outperforms all existing methods”
+
+“first geometry-aware RWKV”
+
+“first 3D RWKV”
+
+“strictly linear in the number of input points”
+
+“rotation invariant”
+
+“permutation invariant”
+
+“no KNN”
+
+“no quadratic operations anywhere”
+
+“Gaussian kernel”
+
+当前核心核是 Manhattan/L1 exponential kernel，不是 Gaussian RBF。
+
+也不要写：
+
+“our model preserves all advantages of RWKV”
+
+因为当前实现已经不是原始的纯序列 recurrent inference。
+
+更准确：
+
+“retains the exponential weighted aggregation principle and admits a separable recursive formulation.”
+
+---
+
+# 25. 当前方法的真实局限
+
+论文必须主动讨论：
+
+1. 体素化引入量化误差；
+2. 核依赖轴对齐 Manhattan geometry；
+3. 模型不是天然旋转不变；
+4. dense grid efficiency 依赖 grid resolution；
+5. 若 M≫N，复杂度是对 voxel count M 而不是实际 token count N；
+6. 理论 recurrence 与当前 GPU dense short-axis implementation 不完全相同；
+7. 当前模型的绝对分类性能仍可能低于强 Mamba baseline；
+8. 输入 tokenization 仍使用 FPS+KNN；
+9. 当前主要验证若仍集中于分类，则不能过度宣称适用于所有 3D understanding tasks。
+
+主动写清楚这些不会削弱论文，反而提高可信度。
+
+---
+
+# 26. Manuscript 推荐结构
+
+请按以下顺序协助我写。
+
+## Abstract
+
+顺序：
+
+问题 → 几何冲突 → 核心 insight → 方法 → efficiency mechanism → 实验。
+
+Abstract 不要堆公式。
+
+## 1. Introduction
+
+建议 4–5 段：
+
+P1：Transformer 与高效序列模型背景。
+
+P2：RWKV/SSM 到点云的核心 mismatch：一维顺序 vs 三维几何。
+
+P3：直接把 temporal decay 换成 pairwise 3D kernel 会破坏递推结构。
+
+P4：我们的 voxel Manhattan exponential insight。
+
+P5：贡献总结。
+
+## 2. Related Work
+
+至少：
+
+### Point Cloud Learning
+
+PointNet/PointNet++、DGCNN、Point Transformer/PointNeXt 等。
+
+### Efficient Sequence/State Models for Point Clouds
+
+PointMamba、Mamba3D 以及其他 Mamba-based 工作。
+
+### RWKV and RWKV for 3D
+
+RWKV、PointRWKV、P-RWKV/PointER 等。
+
+不要为了 Related Work 数量去虚构引用。
+
+## 3. Method
+
+
+### 3.1 Preliminary: RWKV Weighted Aggregation
+
+解释原始 WKV 和指数递推为什么成立。
+
+### 3.2 From Temporal Decay to Geometric Decay
+
+说明 naive Euclidean kernel 为什么无法保留单状态 recurrence。
+
+这一节非常重要，因为它解释为什么不是直接：
+
+exp(-||p_i-p_j||²)。
+
+### 3.3 Separable 3D Voxel WKV
+
+给出 voxel distance：
+
+d=h_x|dx|+h_y|dy|+h_z|dz|
+
+推导三轴分离。
+
+### 3.4 Normalized Voxel WKV
+
+介绍 scalar key、numerator/denominator、self bonus 和 density normalization。
+
+### 3.5 Efficient Voxel-WKV Block
+
+介绍 joint D+1 propagation、cached layout、shift-free Channel-Mixing。
+
+### 3.6 Hierarchical Backbone
+
+介绍 [4,4,4] stage。
+
+### 3.7 Complexity Analysis
+
+严格区分：
+
+理论 recurrence
+
+vs.
+
+当前 dense short-axis GPU implementation。
+
+## 4. Experiments
+
+我完成了ModelNet40、ScanObjectNN(OBJ-BG\OBJ-ONLY\PB-T50-RS)分类实验和ShapeNetPart分割实验。实验结果参考/exp/Parameste_exp.xlsx的v1m5模型。
+注意我们还比对了Parameter/M和FLOPs/G。如果实验写作部分有任何你不清楚的超参数(请你编一个，我后续审查时会补上的)。实验写作部分参考常见点云分析文章，例如Mamba3D等
+
+
+## 5. Limitations / Discussion
+
+明确写出体素、轴对齐、旋转和 dense grid 的限制。
+
+---
+
+# 27. 写作风格
+
+目标是 SCI 3/4区 一类视觉论文风格：
+
+* 学术、克制；
+* 逻辑强于修辞；
+* 每一个优势都尽量有公式或实验支撑；
+* 不通过贬低 PointRWKV/Mamba 来制造创新性；
+* 不为了“创新点更多”而把普通实现细节包装成独立贡献。
+
+核心应该是一条非常干净的理论线：
+
+Temporal exponential decay
+→ geometry mismatch
+→ naive pairwise spatial kernel
+→ recurrence breaks
+→ voxel L1 distance
+→ exact separability
+→ axis-wise exponential WKV
+→ efficient normalized spatial mixing.
+
+这是论文真正值得强调的地方。
+
+---
+
+# 28. 事实层级管理
+
+以后撰稿时，请把信息严格分成三类。
+
+### A. 已由文献直接支持
+
+必须引用原论文。
+
+例如：
+
+PointMamba 使用 space-filling curves；
+PointRWKV 包含 local graph branch；
+Mamba3D 强调 local feature enhancement。
+
+### B. 我们数学上推导得到
+
+例如：
+
+Gaussian/任意 pairwise kernel 一般无法使用单一 RWKV 状态递推；
+Manhattan exponential kernel 可以严格分离；
+一维 exponential kernel 可以双向一阶递推。
+
+这些必须给出推导，而不是引用其他论文替代证明。
+
+
+---
+
+# 29. 关于研究过程的真实性
+
+以下是真实研究路径，可以用于 Introduction 的逻辑设计或 Discussion，但不要把所有思考过程写成日记式文字：
+
+1. 从 PointRWKV 代码和 RWKV 数学结构开始分析。
+2. 注意到 RWKV 的 decay 本质依赖一维 token distance。
+3. 认为点云真正需要的是 3D spatial distance。
+4. 首先考虑直接将 decay 改成 Euclidean/Gaussian geometry kernel。
+5. 发现这样失去了原始 RWKV 的统一历史状态递推。
+6. 考虑过随机特征等 kernel approximation，但认为不够直接。
+7. 进一步考虑规则体素化是否可以使空间距离产生可递推结构。
+8. 发现 weighted Manhattan exponential distance 可以分解为三个独立的一维指数核。
+9. 从而得到精确的 axis-wise recurrence。
+10. 基于它构造 normalized Voxel-WKV。
+11. 为减少实际计算，进一步采用 scalar head key 和 numerator/denominator joint propagation。
+12. 删除不再具有合理几何意义的 sequence token shift/BQE。
+13. 最初担心缺少局部建模，因此测试了 local residual、DWConv 等。
+14. 实验显示这些模块没有改善，因此最终保留更简单结构。
+15. 从 Serial-12 转向 Hierarchical 4/4/4 后发现，在保持接近或更好准确率的同时明显降低计算量。
+16. 最终形成当前模型。
+
+这就是我们实际的创新形成过程。
+
+不要修改成一个事后看起来“从第一天就知道最终答案”的虚假故事。
+
+可以把论文叙事整理得简洁，但不能改变上述事实关系。
+
+---
+
+# 30. 你接手手稿后的工作方式
+
+在正式帮我写任何章节前：
+
+1. 先检索最新相关工作。
+2. 建立“可以安全声称 / 不能安全声称”的 claim list。
+3. 找出可能与我们核心思想高度接近的论文，尤其检查 2025–2026 新工作。
+4. 如果发现已有论文已经提出相同的 voxel separable exponential RWKV，请立即告诉我，不要继续假装创新。
+5. 对核心数学公式独立检查推导。
+6. 不要根据当前单次实验结果写 SOTA claim。
+7. 等完整 benchmark 结束后再写最终 Abstract 和 Conclusion。
+
+---
+
+现在请你开始文章Geo_RWKVcnV2.docx的中文写作部分
