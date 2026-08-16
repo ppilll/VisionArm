@@ -201,3 +201,90 @@ sudo ./build-r6-l2-board/vision_pipeline_r7_r8_probe \
   --uart-baud 115200 \
   --uart-ready-timeout-ms 5000 \
   --report reports/v6/r6_l2/uart_smoke.txt
+
+
+source /opt/atk-dlrk3588-toolchain/environment-setup
+/usr/bin/cmake \
+ -S visionram \
+ -B build/build-step-k \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DVISIONARM_BUILD_RUNTIME=OFF \
+  -DVISIONARM_BUILD_TESTS=OFF \
+  -DVISIONARM_BUILD_CAPTURE_TOOLS=OFF \
+  -DVISIONARM_BUILD_ACCELERATION_TOOLS=OFF \
+  -DVISIONARM_ENABLE_UART_CONTROL=ON \
+  -DVISIONARM_BUILD_UART_BOARD_TESTS=ON
+
+ /usr/bin/cmake \
+  --build build/build-step-k \
+  --target uart_step_k_synthetic_test \
+  --parallel "$(nproc)"
+
+mkdir -p reports/v6/step_k
+
+./uart_step_k_synthetic_test \
+  --device /dev/ttyS3 \
+  --baud 115200 \
+  --ready-timeout-ms 5000 \
+  --center-tolerance-q15 2048 \
+  --hold-tolerance-q15 2048 \
+  --movement-min-q15 256 \
+  --report reports/v6/step_k/step_k_report.txt \
+  --csv reports/v6/step_k/step_k_status.csv \
+  2>&1 | tee reports/v6/step_k/step_k_console.log
+
+source /opt/atk-dlrk3588-toolchain/environment-setup
+SDK="$HOME/work/Linux_SDK/atk_dlrk3588_linux5.10"
+
+RKNN_INCLUDE_DIR="$SDK/external/rknpu2/runtime/Linux/librknn_api/include"
+RKNN_LIBRARY="$SDK/external/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so"
+DRGA_INCLUDE_DIR="$SDK/external/rknpu2/examples/3rdparty/rga/include"
+DRGA_LIBRARY="$SDK/external/rknpu2/examples/3rdparty/rga/libs/Linux/gcc-aarch64/librga.so"
+OpenCV_DIR="$SDK/external/rknpu2/examples/3rdparty/opencv/opencv-linux-aarch64/share/OpenCV"
+DMPP_INCLUDE_DIR="$SDK/external/rknpu2/examples/3rdparty/mpp/include/rockchip"
+DMPP_LIBRARY="$SDK/external/rknpu2/examples/3rdparty/mpp/Linux/aarch64/librockchip_mpp.so.1"
+
+/usr/bin/cmake \
+  -S visionram  \
+  -B build/v7-board \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DVISIONARM_BUILD_RUNTIME=ON \
+  -DVISIONARM_BUILD_TESTS=ON \
+  -DVISIONARM_BUILD_CAPTURE_TOOLS=ON \
+  -DVISIONARM_BUILD_ACCELERATION_TOOLS=ON \
+  -DVISIONARM_ENABLE_OPENCV_PREPROCESS=ON \
+  -DVISIONARM_ENABLE_RGA_PREPROCESS=ON \
+  -DVISIONARM_ENABLE_MPP_VIDEO=ON \
+  -DVISIONARM_ENABLE_UART_CONTROL=ON \
+  -DCMAKE_TOOLCHAIN_FILE="$(pwd)/cmake/rk3588-toolchain.cmake" \
+  -DRKNN_INCLUDE_DIR:PATH="$RKNN_INCLUDE_DIR" \
+  -DRKNN_LIBRARY:FILEPATH="$RKNN_LIBRARY" \
+  -DRGA_INCLUDE_DIR:PATH="$DRGA_INCLUDE_DIR" \
+  -DRGA_LIBRARY:FILEPATH="$DRGA_LIBRARY" \
+  -DOpenCV_DIR:PATH="$OpenCV_DIR" \
+  -DMPP_INCLUDE_DIR:PATH="$DMPP_INCLUDE_DIR" \
+  -DMPP_LIBRARY:FILEPATH="$DMPP_LIBRARY"
+
+/usr/bin/cmake \
+  --build build/v7-board \
+  --parallel "$(nproc)"
+
+mkdir -p reports/v7_generation 
+
+LD_LIBRARY_PATH=/mnt/nfs/visionarm-mpp-test/lib \
+  ./vision_pipeline_r7_r8_probe \
+  --device /dev/video22 \
+  --model model/best_i8.rknn \
+  --output reports/v7_sign/dowm.h265 \
+  --width 1280 --height 720 --fps 30 \
+  --buffers 6 --video-queue 2 \
+  --bitrate 4000000 --gop 60 \
+  --duration-sec 10 \
+  --topology fused \
+  --input-slots 1 --output-slots 1 \
+  --input-dma-heap /dev/dma_heap/system-uncached-dma32 \
+  --control-backend uart \
+  --uart-device /dev/ttyS3 --uart-baud 115200 \
+  --v7-control-csv reports/v7_sign/dowm_control.csv \
+  --v7-status-csv reports/v7_sign/dowm_status.csv \
+  --report reports/v7_sign/dowm_probe.txt

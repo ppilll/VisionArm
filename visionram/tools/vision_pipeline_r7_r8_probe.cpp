@@ -6,6 +6,7 @@
 #include "uart/uart_link.h"
 #endif
 #include "inference/rknn_engine.h"
+#include "metrics/v7_control_trace_recorder.h"
 #include "pipeline/inference_pipeline.h"
 #include "pipeline/latest_result_store.h"
 #include "pipeline/target_state_machine.h"
@@ -85,6 +86,8 @@ struct Options {
     std::string uart_device = "/dev/ttyS3";
     int uart_baud = 115200;
     int uart_ready_timeout_ms = 5000;
+    std::string v7_control_csv;
+    std::string v7_status_csv;
     visionarm::InferenceThreadTopology topology =
         visionarm::InferenceThreadTopology::FUSED_NPU_POSTPROCESS;
 };
@@ -101,7 +104,8 @@ struct Options {
         << "  [--max-rss-growth-kb N] [--vertical-stride N] \\\n"
         << "  [--input-dma-heap PATH] [--confidence F] [--report PATH] \\\n"
         << "  [--control-backend mock|uart] [--uart-device /dev/ttyS3] \\\n"
-        << "  [--uart-baud 115200] [--uart-ready-timeout-ms 5000]\n";
+        << "  [--uart-baud 115200] [--uart-ready-timeout-ms 5000] \\\n"
+        << "  [--v7-control-csv control.csv] [--v7-status-csv status.csv]\n";
     std::exit(EXIT_FAILURE);
 }
 
@@ -174,6 +178,10 @@ Options ParseOptions(int argc, char** argv) {
         } else if (key == "--uart-ready-timeout-ms") {
             options.uart_ready_timeout_ms =
                 ParsePositiveInt(next(), "UART ready timeout");
+        } else if (key == "--v7-control-csv") {
+            options.v7_control_csv = next();
+        } else if (key == "--v7-status-csv") {
+            options.v7_status_csv = next();
         } else if (key == "--topology") {
             const std::string value = next();
             if (value == "fused") {
@@ -199,6 +207,11 @@ Options ParseOptions(int argc, char** argv) {
     if (options.control_backend == ControlBackend::UART &&
         options.uart_device.empty()) {
         throw std::invalid_argument("UART device must not be empty");
+    }
+    if (!options.v7_status_csv.empty() &&
+        options.control_backend != ControlBackend::UART) {
+        throw std::invalid_argument(
+            "--v7-status-csv requires --control-backend uart");
     }
 #if !defined(VISIONARM_HAS_UART_CONTROL)
     if (options.control_backend == ControlBackend::UART) {
@@ -235,6 +248,39 @@ bool WaitForUartReady(
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     return false;
+}
+
+void WriteV7StatusCsvHeader(std::ofstream& output) {
+    output
+        << "host_steady_ns,link_state,mcu_state,remote_stop_latched,"
+        << "control_valid,last_rx_wire_sequence,last_control_wire_sequence,"
+        << "control_mailbox_overwrite_count,mcu_tick_ms,pan_command_q15,"
+        << "tilt_command_q15\n";
+}
+
+bool WriteV7StatusCsvRow(
+    std::ofstream& output,
+    const visionarm::uart::UartModuleSnapshot& snapshot) {
+    if (!snapshot.last_status.has_value()) {
+        return false;
+    }
+
+    const auto host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const auto& status = *snapshot.last_status;
+    output << host_ns << ','
+           << static_cast<unsigned int>(snapshot.state) << ','
+           << static_cast<unsigned int>(status.mcu_state) << ','
+           << static_cast<unsigned int>(status.remote_stop_latched) << ','
+           << static_cast<unsigned int>(status.control_valid) << ','
+           << status.last_rx_wire_sequence << ','
+           << status.last_control_wire_sequence << ','
+           << status.control_mailbox_overwrite_count << ','
+           << status.mcu_tick_ms << ','
+           << status.pan_stub_q15 << ','
+           << status.tilt_stub_q15 << '\n';
+    output.flush();
+    return static_cast<bool>(output);
 }
 #endif
 
@@ -520,6 +566,33 @@ int main(int argc, char** argv) {
         }
 #endif
 
+        std::unique_ptr<visionarm::V7ControlTraceRecorder> v7_control_trace;
+        if (!options.v7_control_csv.empty()) {
+            v7_control_trace =
+                std::make_unique<visionarm::V7ControlTraceRecorder>(
+                    *selected_control_sink, options.v7_control_csv);
+            selected_control_sink = v7_control_trace.get();
+            std::cout << "V7 control trace=" << options.v7_control_csv << '\n';
+        }
+
+#if defined(VISIONARM_HAS_UART_CONTROL)
+        std::ofstream v7_status_trace;
+        std::optional<uint32_t> v7_last_status_tick;
+        if (!options.v7_status_csv.empty()) {
+            v7_status_trace.open(options.v7_status_csv, std::ios::trunc);
+            if (!v7_status_trace) {
+                throw std::runtime_error("failed to open V7 status trace CSV");
+            }
+            WriteV7StatusCsvHeader(v7_status_trace);
+            v7_status_trace.flush();
+            if (!v7_status_trace) {
+                throw std::runtime_error(
+                    "failed to initialize V7 status trace CSV");
+            }
+            std::cout << "V7 MCU status trace=" << options.v7_status_csv << '\n';
+        }
+#endif
+
         visionarm::TargetStateMachineConfig state_config;
         state_config.acquire_hits =
             static_cast<uint32_t>(options.acquire_hits);
@@ -565,16 +638,41 @@ int main(int argc, char** argv) {
             std::chrono::seconds(options.duration_seconds);
         auto next_rss_sample = std::chrono::steady_clock::now() +
             std::chrono::seconds(1);
+#if defined(VISIONARM_HAS_UART_CONTROL)
+        auto next_v7_status_sample = std::chrono::steady_clock::now();
+#endif
         while (!g_stop.load(std::memory_order_acquire) &&
                std::chrono::steady_clock::now() < deadline &&
                pipeline.running()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            if (std::chrono::steady_clock::now() >= next_rss_sample) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= next_rss_sample) {
                 rss.Add(ReadVmRssKb());
                 next_rss_sample += std::chrono::seconds(1);
             }
+#if defined(VISIONARM_HAS_UART_CONTROL)
+            if (uart_link != nullptr && v7_status_trace.is_open() &&
+                now >= next_v7_status_sample) {
+                const auto snapshot = uart_link->GetSnapshot();
+                if (snapshot.last_status.has_value()) {
+                    const uint32_t tick = snapshot.last_status->mcu_tick_ms;
+                    if (!v7_last_status_tick.has_value() ||
+                        tick != *v7_last_status_tick) {
+                        if (!WriteV7StatusCsvRow(v7_status_trace, snapshot)) {
+                            throw std::runtime_error(
+                                "failed to write V7 status trace CSV");
+                        }
+                        v7_last_status_tick = tick;
+                    }
+                }
+                next_v7_status_sample = now + std::chrono::milliseconds(50);
+            }
+#endif
         }
         pipeline.Stop();
+        if (v7_control_trace != nullptr) {
+            v7_control_trace->Stop();
+        }
         rss.Add(ReadVmRssKb());
 
         const visionarm::PipelineStatsSnapshot stats = pipeline.stats();
@@ -590,6 +688,10 @@ int main(int argc, char** argv) {
             state_machine.Snapshot();
         const visionarm::MockControlSinkSnapshot mock_control_stats =
             mock_control_sink.Snapshot();
+        std::optional<visionarm::V7ControlTraceStats> v7_trace_stats;
+        if (v7_control_trace != nullptr) {
+            v7_trace_stats = v7_control_trace->Snapshot();
+        }
 
 #if defined(VISIONARM_HAS_UART_CONTROL)
         std::optional<visionarm::UartControlSinkSnapshot> uart_control_stats;
@@ -625,6 +727,8 @@ int main(int argc, char** argv) {
         report << "max_result_age_ms=" << options.max_result_age_ms << '\n';
         report << "control_backend="
                << ControlBackendName(options.control_backend) << '\n';
+        report << "v7_control_csv=" << options.v7_control_csv << '\n';
+        report << "v7_status_csv=" << options.v7_status_csv << '\n';
         if (options.control_backend == ControlBackend::UART) {
             report << "uart_device=" << options.uart_device << '\n';
             report << "uart_baud=" << options.uart_baud << '\n';
@@ -782,6 +886,18 @@ int main(int argc, char** argv) {
                    << link.metrics.parser.oversize_errors << '\n';
         }
 #endif
+        if (v7_trace_stats.has_value()) {
+            const auto& trace = *v7_trace_stats;
+            report << "v7.trace.submissions=" << trace.submissions << '\n';
+            report << "v7.trace.downstream_accepted="
+                   << trace.downstream_accepted << '\n';
+            report << "v7.trace.downstream_rejected="
+                   << trace.downstream_rejected << '\n';
+            report << "v7.trace.enqueued=" << trace.enqueued << '\n';
+            report << "v7.trace.dropped=" << trace.dropped << '\n';
+            report << "v7.trace.written=" << trace.written << '\n';
+            report << "v7.trace.write_errors=" << trace.write_errors << '\n';
+        }
 
         WriteQueue(report, "queue.captured", stats.captured_frame_queue);
         WriteQueue(report, "queue.prepared", stats.prepared_frame_queue);
@@ -876,6 +992,14 @@ int main(int argc, char** argv) {
         }
 #endif
 
+        const bool v7_trace_ok =
+            !v7_trace_stats.has_value() ||
+            (v7_trace_stats->submissions > 0U &&
+             v7_trace_stats->downstream_rejected == 0U &&
+             v7_trace_stats->dropped == 0U &&
+             v7_trace_stats->write_errors == 0U &&
+             v7_trace_stats->written == v7_trace_stats->enqueued);
+
         const bool passed =
             stats.captured_frames > 0U &&
             stats.video_frames_encoded > 0U &&
@@ -908,7 +1032,7 @@ int main(int argc, char** argv) {
             state_stats.perception_sink_failures == 0U &&
             state_stats.invalid_timestamp_packets == 0U &&
             control_ok &&
-            queues_ok && timing_ok && rss_ok;
+            queues_ok && timing_ok && rss_ok && v7_trace_ok;
 
         report << "vision_pipeline_r7_r8_probe="
                << (passed ? "PASS" : "FAIL") << '\n';

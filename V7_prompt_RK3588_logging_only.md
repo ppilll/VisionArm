@@ -666,7 +666,6 @@ GimbalTask：
 * 软件 PWM；
 * 长时间 HAL_Delay；
 * 高频 malloc/free；
-* 大量同步 printf。
 
 ---
 
@@ -1338,7 +1337,6 @@ V7.6 Stability & Final Metrics
 
 ```text
 每帧 printf
-每次 GimbalTask printf
 每个 UART byte printf
 ```
 
@@ -1346,7 +1344,6 @@ V7.6 Stability & Final Metrics
 
 * 增加 CPU；
 * 增加锁竞争；
-* 改变 task timing；
 * 改变 UART timing；
 * 扰动真实控制实验。
 
@@ -1429,18 +1426,6 @@ SAFETY
 PERF
 ```
 
-STM32：
-
-```text
-PROTOCOL
-LINK
-MAILBOX
-GIMBAL
-ACTUATOR
-SAFETY
-WATCHDOG
-RTOS
-```
 
 必须支持：
 
@@ -1454,8 +1439,6 @@ per-module level
 
 ```text
 global = INFO
-GIMBAL = DEBUG
-PROTOCOL = WARN
 ```
 
 ---
@@ -1522,159 +1505,6 @@ non-blocking
 
 ---
 
-# 三十二、STM32 调试日志与 RS-485 必须隔离
-
-这是强制要求。
-
-当前 V5 RS-485：
-
-```text
-binary framed protocol
-```
-
-并且：
-
-```text
-ProtocolTxTask = only UART TX owner
-```
-
-因此禁止：
-
-```c
-printf("gimbal=%d\r\n");
-```
-
-重定向到 USART2 RS-485。
-
-否则将直接破坏：
-
-```text
-framing
-CRC
-sequence
-peer state
-```
-
-第一步必须检查：
-
-```text
-当前 printf/debug UART 到底是哪一个物理通道
-```
-
----
-
-# 三十三、STM32 日志输出优先方案
-
-按照优先级考虑：
-
-## 方案 A：独立 Debug UART
-
-最佳。
-
-例如：
-
-```text
-USART1 debug
-USART2 RS485 protocol
-```
-
-具体 UART/pin 不得猜测。
-
-若硬件具备：
-
-```text
-LogTask
-→ dedicated debug UART
-```
-
-LogTask 优先级建议低于：
-
-```text
-Gimbal
-```
-
-例如逻辑上：
-
-```text
-ProtocolRx 5
-ProtocolTx 4
-Gimbal     2
-Log        1
-Idle       0
-```
-
-具体优先级需结合当前工程。
-
----
-
-## 方案 B：SWO/ITM
-
-如果开发板硬件和调试器实际支持，可以作为开发阶段 P1。
-
-但 release 产品不能依赖 SWO 才能运行。
-
----
-
-## 方案 C：RAM Log Ring
-
-如果没有独立串口：
-
-```text
-producer
-→ fixed static ring
-```
-
-只记录固定尺寸 event。
-
-不得：
-
-```text
-malloc
-```
-
-不得阻塞控制。
-
-溢出时：
-
-```text
-drop log
-increment log_drop_count
-```
-
-产品行为永远优先于日志完整。
-
----
-
-## 方案 D：Protocol Diagnostic Pull
-
-只有确实需要时才评估。
-
-可以设计：
-
-```text
-host request
-→ MCU returns diagnostic snapshot
-```
-
-必须是：
-
-```text
-host-triggered
-```
-
-不能变成 unsolicited transmission。
-
-如需扩展 V5 protocol：
-
-必须：
-
-* backward compatible；
-* protocol minor extension；
-* 不修改原控制/safety语义。
-
-这属于 P1，不是 V7 P0。
-
----
 
 # 三十四、严禁同步日志阻塞实时路径
 
@@ -1683,9 +1513,6 @@ host-triggered
 ```text
 Camera thread
 Inference thread
-ProtocolRxTask
-GimbalTask
-ISR
 ```
 
 执行耗时格式化输出。
@@ -1711,19 +1538,6 @@ drop log
 block controller
 ```
 
-禁止在 ISR：
-
-* printf；
-* snprintf；
-* floating format；
-* blocking UART。
-
-ISR 只更新：
-
-```text
-counter
-event flag
-```
 
 ---
 
@@ -1734,8 +1548,6 @@ event flag
 ```text
 dx
 dy
-servo pulse
-50Hz task state
 30fps inference result
 ```
 
@@ -1832,39 +1644,6 @@ result_age
 control_sequence
 uart_submit_timestamp
 ```
-
-MCU 至少记录/统计：
-
-```text
-wire_sequence
-mailbox_generation
-receive_tick
-
-controller_update_tick
-
-error_x_q15
-error_y_q15
-
-pan_command_us
-tilt_command_us
-
-pan_delta_us
-tilt_delta_us
-
-dead_zone_active_x
-dead_zone_active_y
-
-pan_limit_active
-tilt_limit_active
-
-remote_stop
-link_ready
-control_valid
-```
-
-如果没有共同时间域：
-
-不要直接拼成绝对单向 latency。
 
 ---
 
@@ -2596,78 +2375,7 @@ persistent configuration。
 
 ---
 
-# 五十七、推荐 V7 目录
 
-```text
-VisionArm-BallTrack/
-├── docs/
-│   └── v7_closed_loop/
-│       ├── README.md
-│       ├── visual_servo_architecture.md
-│       ├── coordinate_sign_contract.md
-│       ├── controller_design.md
-│       ├── controller_tuning.md
-│       ├── logging_architecture.md
-│       ├── logging_policy.md
-│       ├── test_protocol.md
-│       ├── static_target_report.md
-│       ├── dynamic_tracking_report.md
-│       ├── lost_recovery_report.md
-│       ├── safety_regression_report.md
-│       ├── performance_report.md
-│       ├── troubleshooting.md
-│       └── v7_acceptance.md
-│
-├── src/
-│   ├── linux_app/
-│   │   ├── logging/
-│   │   │   ├── log_level.h
-│   │   │   ├── logger.h
-│   │   │   ├── logger.cpp
-│   │   │   ├── log_control.h
-│   │   │   └── log_control.cpp
-│   │   └── metrics/
-│   │       └── closed_loop_metrics.*
-│   │
-│   └── mcu_firmware/
-│       ├── gimbal/
-│       │   ├── visual_servo_controller.h
-│       │   ├── visual_servo_controller.c
-│       │   └── visual_servo_config.h
-│       │
-│       └── logging/
-│           ├── mcu_log.h
-│           ├── mcu_log.c
-│           ├── log_ring.h
-│           └── log_ring.c
-│
-├── configs/
-│   └── v7/
-│       ├── controller_config.yaml
-│       └── logging_config.yaml
-│
-├── tools/
-│   └── v7/
-│       ├── analyze_closed_loop.py
-│       ├── plot_error_response.py
-│       ├── compare_controller_runs.py
-│       ├── analyze_log_overhead.py
-│       └── run_tracking_test.sh
-│
-├── logs/
-│   └── v7/
-│       ├── controller/
-│       ├── metrics/
-│       └── stability/
-│
-└── reports/
-    └── v7/
-        ├── plots/
-        ├── videos/
-        └── csv/
-```
-
----
 
 # 五十八、V7 Markdown 文档模板要求
 
@@ -2752,7 +2460,6 @@ VisionArm-BallTrack/
 包含：
 
 * Linux logging；
-* MCU logging；
 * log levels；
 * module filters；
 * compile-time level；
@@ -2934,7 +2641,6 @@ duplicate generation
 controller updates
 limit count
 stop events
-log drops
 ```
 
 闭环：
@@ -3027,7 +2733,6 @@ BLOCKED
 25. 10-minute closed-loop stability；
 26. Linux log levels；
 27. Linux runtime log control；
-28. MCU log levels；
 29. debug output does not corrupt RS-485；
 30. compile-time log filtering；
 31. runtime log filtering；
@@ -3046,7 +2751,6 @@ BLOCKED
 2. 30～60 min tracking；
 3. multiple gain profiles；
 4. low/medium target speeds；
-5. MCU dedicated debug UART；
 6. log module runtime mask；
 7. controller runtime parameter tuning；
 8. log drop counters；
@@ -3076,42 +2780,4 @@ BLOCKED
 
 ---
 
-# 六十二、具体执行步骤
 
-必须严格按下面顺序。
-
-## Step A：冻结 V4/V5/V6 baseline
-
-生成 config snapshot 和 Git tag/commit。
-
-不得边调 V7 边偷偷修改旧模块。
-
----
-
-## Step B：建立日志框架
-
-先收敛 debug print。
-
-避免之后所有闭环测量被 printf 扰动。
-
-先测：
-
-```text
-logging OFF
-logging INFO
-logging DEBUG
-```
-
-对：
-
-```text
-capture→result
-Gimbal timing
-CPU
-```
-
-的影响。
-
----
-
-## Step C：确认 MCU debug print

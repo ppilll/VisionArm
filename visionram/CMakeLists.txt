@@ -37,6 +37,15 @@ option(
     VISIONARM_ENABLE_UART_CONTROL
     "Build the integrated R6 UART control path"
     ON)
+option(
+    VISIONARM_BUILD_UART_BOARD_TESTS
+    "Build real RK3588-to-MCU UART motor-control board tests"
+    OFF)
+
+if(VISIONARM_BUILD_UART_BOARD_TESTS AND NOT VISIONARM_ENABLE_UART_CONTROL)
+    message(FATAL_ERROR
+        "VISIONARM_BUILD_UART_BOARD_TESTS requires VISIONARM_ENABLE_UART_CONTROL=ON")
+endif()
 
 find_package(Threads REQUIRED)
 
@@ -118,6 +127,45 @@ if(VISIONARM_ENABLE_UART_CONTROL)
             visionarm::uart_link)
     target_compile_options(
         visionarm_uart_adapter
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
+endif()
+
+if(VISIONARM_BUILD_UART_BOARD_TESTS)
+    add_executable(
+        uart_motor_control_board_test
+        tests/uart_motor_control_board_test.cpp)
+    target_link_libraries(
+        uart_motor_control_board_test
+        PRIVATE
+            visionarm::uart_link)
+    target_compile_options(
+        uart_motor_control_board_test
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
+
+    # Step-K is a real-hardware synthetic controller qualification executable.
+    # It intentionally links the frozen protocol + SerialPort layers directly
+    # so the test can set capture_age_at_tx_ms=0 and exact 20/100 ms wire
+    # cadence without changing the production UartLink implementation.
+    add_executable(
+        uart_step_k_synthetic_test
+        tests/uart_step_k_synthetic_test.cpp)
+    target_link_libraries(
+        uart_step_k_synthetic_test
+        PRIVATE
+            visionarm::uart_protocol
+            visionarm::uart_transport)
+    target_compile_options(
+        uart_step_k_synthetic_test
         PRIVATE
             -Wall
             -Wextra
@@ -366,7 +414,8 @@ if(VISIONARM_BUILD_RUNTIME AND VISIONARM_BUILD_ACCELERATION_TOOLS)
 
         add_executable(
             vision_pipeline_r7_r8_probe
-            tools/vision_pipeline_r7_r8_probe.cpp)
+            tools/vision_pipeline_r7_r8_probe.cpp
+            src/metrics/v7_control_trace_recorder.cpp)
         target_link_libraries(
             vision_pipeline_r7_r8_probe
             PRIVATE
@@ -479,6 +528,16 @@ if(VISIONARM_BUILD_TESTS)
             visionarm::contract
             Threads::Threads)
 
+    add_executable(
+        v7_control_trace_recorder_test
+        tests/v7_control_trace_recorder_test.cpp
+        src/metrics/v7_control_trace_recorder.cpp)
+    target_link_libraries(
+        v7_control_trace_recorder_test
+        PRIVATE
+            visionarm::contract
+            Threads::Threads)
+
     if(VISIONARM_ENABLE_UART_CONTROL)
         add_executable(
             uart_control_sink_test
@@ -506,7 +565,8 @@ if(VISIONARM_BUILD_TESTS)
             yolov8_top1_postprocessor_test
             target_state_machine_test
             latency_accumulator_test
-            bounded_queue_metrics_test)
+            bounded_queue_metrics_test
+            v7_control_trace_recorder_test)
         target_compile_options(
             ${test_target}
             PRIVATE
@@ -554,11 +614,15 @@ if(VISIONARM_BUILD_TESTS)
     add_test(
         NAME bounded_queue_metrics_test
         COMMAND bounded_queue_metrics_test)
+    add_test(
+        NAME v7_control_trace_recorder_test
+        COMMAND v7_control_trace_recorder_test)
 
     set_tests_properties(
         target_state_machine_test
         latency_accumulator_test
         bounded_queue_metrics_test
+        v7_control_trace_recorder_test
         PROPERTIES TIMEOUT 15)
 
     if(VISIONARM_ENABLE_UART_CONTROL)
