@@ -246,7 +246,7 @@ DMPP_LIBRARY="$SDK/external/rknpu2/examples/3rdparty/mpp/Linux/aarch64/librockch
 
 /usr/bin/cmake \
   -S visionram  \
-  -B build/v7-board \
+  -B build/v8 \
   -DCMAKE_BUILD_TYPE=Release \
   -DVISIONARM_BUILD_RUNTIME=ON \
   -DVISIONARM_BUILD_TESTS=ON \
@@ -266,17 +266,18 @@ DMPP_LIBRARY="$SDK/external/rknpu2/examples/3rdparty/mpp/Linux/aarch64/librockch
   -DMPP_LIBRARY:FILEPATH="$DMPP_LIBRARY"
 
 /usr/bin/cmake \
-  --build build/v7-board \
+  --build build/v8 \
   --parallel "$(nproc)"
 
 mkdir -p reports/v7_generation 
 
 LD_LIBRARY_PATH=/mnt/nfs/visionarm-mpp-test/lib \
   ./vision_pipeline_r7_r8_probe \
-  --device /dev/video22 \
+  --device /dev/video-camera0 \
+  --sensor-subdev /dev/v4l-subdev2 \
   --model model/best_i8.rknn \
   --output reports/v7_sign/dowm.h265 \
-  --width 1280 --height 720 --fps 30 \
+  --width 2560 --height 1440 --fps 90 \
   --buffers 6 --video-queue 2 \
   --bitrate 4000000 --gop 60 \
   --duration-sec 10 \
@@ -288,3 +289,4 @@ LD_LIBRARY_PATH=/mnt/nfs/visionarm-mpp-test/lib \
   --v7-control-csv reports/v7_sign/dowm_control.csv \
   --v7-status-csv reports/v7_sign/dowm_status.csv \
   --report reports/v7_sign/dowm_probe.txt
+  

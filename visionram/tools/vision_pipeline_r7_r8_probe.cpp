@@ -148,13 +148,16 @@ struct ProductCameraMode {
     int fps;
 };
 
-constexpr std::array<ProductCameraMode, 6> kEnabledCameraModes{{
+constexpr std::array<ProductCameraMode, 7> kEnabledCameraModes{{
     {1920, 1080, 30},
     {2560, 1440, 30},
     {3840, 2160, 30},
     {1920, 1080, 60},
     {2560, 1440, 60},
     {3840, 2160, 60},
+    // V8.1 P0 high-frame-rate product mode. The sensor uses the
+    // 3864x2192 RAW10 90fps profile; RKISP produces 1920x1080 NV12.
+    {1920, 1080, 90},
 }};
 
 [[nodiscard]] bool IsProductOutputResolution(int width, int height) noexcept {
@@ -186,17 +189,10 @@ void ValidateCameraMode(const Options& options) {
             "1920x1080, 2560x1440, 3840x2160");
     }
 
-    if (options.fps == 90) {
-        throw std::invalid_argument(
-            "90 fps is a reserved product rate but is not enabled in the "
-            "current V8.1 capability matrix; complete 90 fps sensor/BSP "
-            "bring-up before enabling it");
-    }
-
     if (!IsEnabledCameraMode(options.width, options.height, options.fps)) {
         throw std::invalid_argument(
             "unsupported camera mode; enabled modes are "
-            "1920x1080@30/60, 2560x1440@30/60, 3840x2160@30/60");
+            "1920x1080@30/60/90, 2560x1440@30/60, 3840x2160@30/60");
     }
 }
 
