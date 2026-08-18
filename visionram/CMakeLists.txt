@@ -181,7 +181,8 @@ add_library(
         src/camera/capture_buffer_broker.cpp
         src/camera/dmabuf_cpu_sync.cpp
         src/camera/v4l2_dmabuf_contract.cpp
-        src/camera/v4l2_camera.cpp)
+        src/camera/v4l2_camera.cpp
+        src/camera/v4l2_sensor_controller.cpp)
 add_library(visionarm::capture ALIAS visionarm_capture)
 target_link_libraries(
     visionarm_capture

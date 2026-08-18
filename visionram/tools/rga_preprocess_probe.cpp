@@ -1,5 +1,6 @@
 #include "camera/dmabuf_cpu_sync.h"
 #include "camera/v4l2_camera.h"
+#include "camera/v4l2_sensor_controller.h"
 #include "common/monotonic_clock.h"
 #include "inference/rknn_engine.h"
 #include "preprocess/nv12_letterbox_preprocessor.h"
@@ -19,6 +20,7 @@ namespace {
 
 struct Args {
     std::string device;
+    std::string sensor_subdev = "/dev/v4l-subdev2";
     std::string model;
     std::string report;
     std::string input_dma_heap =
@@ -37,6 +39,7 @@ struct Args {
 [[noreturn]] void Usage(const char* program) {
     std::cerr
         << "Usage: " << program << " --device /dev/videoX --model model.rknn "
+        << "[--sensor-subdev /dev/v4l-subdev2] "
         << "[--width 1280] [--height 720] [--fps 30] [--buffers 6] "
         << "[--frames 100] [--timeout-ms 2000] [--report path] "
         << "[--input-dma-heap /dev/dma_heap/system-uncached-dma32] "
@@ -63,6 +66,7 @@ Args ParseArgs(int argc, char** argv) {
             return argv[++index];
         };
         if (option == "--device") args.device = value();
+        else if (option == "--sensor-subdev") args.sensor_subdev = value();
         else if (option == "--model") args.model = value();
         else if (option == "--report") args.report = value();
         else if (option == "--input-dma-heap") {
@@ -131,7 +135,6 @@ int main(int argc, char** argv) {
         camera_config.width = args.width;
         camera_config.height = args.height;
         camera_config.pixel_format = V4L2_PIX_FMT_NV12;
-        camera_config.fps = args.fps;
         camera_config.buffer_count = args.buffers;
         camera_config.timeout_ms = args.timeout_ms;
         camera_config.export_dmabuf = true;
@@ -139,6 +142,9 @@ int main(int argc, char** argv) {
 
         visionarm::V4L2Camera camera(camera_config);
         camera.Open();
+
+        visionarm::V4L2SensorController sensor({args.sensor_subdev, 0U});
+        (void)sensor.ConfigureFrameRate(args.fps);
 
         visionarm::RgaLetterboxConfig rga_config;
         rga_config.model_width = static_cast<int>(engine.input_shape().width);

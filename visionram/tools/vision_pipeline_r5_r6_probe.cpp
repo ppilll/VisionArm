@@ -1,5 +1,6 @@
 #include "camera/capture_buffer_broker.h"
 #include "camera/v4l2_camera.h"
+#include "camera/v4l2_sensor_controller.h"
 #include "inference/rknn_engine.h"
 #include "pipeline/inference_pipeline.h"
 #include "postprocess/yolov8_top1_postprocessor.h"
@@ -40,6 +41,7 @@ void SignalHandler(int) {
 
 struct Options {
     std::string device;
+    std::string sensor_subdev = "/dev/v4l-subdev2";
     std::string model;
     std::string output;
     std::string report;
@@ -65,7 +67,8 @@ struct Options {
 [[noreturn]] void Usage(const char* program) {
     std::cerr
         << "Usage: " << program << " \\\n"
-        << "  --device /dev/videoX --model model.rknn --output stream.h265 \\\n"
+        << "  --device /dev/videoX --sensor-subdev /dev/v4l-subdevX \\\n"
+        << "  --model model.rknn --output stream.h265 \\\n"
         << "  --width W --height H --fps FPS --bitrate BPS --gop N \\\n"
         << "  [--topology fused|split] [--duration-sec N] \\\n"
         << "  [--buffers N] [--video-queue N] [--input-slots N] \\\n"
@@ -96,6 +99,7 @@ Options ParseOptions(int argc, char** argv) {
         };
 
         if (key == "--device") options.device = next();
+        else if (key == "--sensor-subdev") options.sensor_subdev = next();
         else if (key == "--model") options.model = next();
         else if (key == "--output") options.output = next();
         else if (key == "--report") options.report = next();
@@ -328,7 +332,6 @@ int main(int argc, char** argv) {
         camera_config.width = static_cast<uint32_t>(options.width);
         camera_config.height = static_cast<uint32_t>(options.height);
         camera_config.pixel_format = V4L2_PIX_FMT_NV12;
-        camera_config.fps = static_cast<uint32_t>(options.fps);
         camera_config.buffer_count = static_cast<uint32_t>(options.buffers);
         camera_config.timeout_ms = options.timeout_ms;
         camera_config.export_dmabuf = true;
@@ -336,6 +339,9 @@ int main(int argc, char** argv) {
 
         visionarm::V4L2Camera camera(camera_config);
         camera.Open();
+        visionarm::V4L2SensorController sensor({options.sensor_subdev, 0U});
+        const visionarm::SensorFrameRate configured_sensor_fps =
+            sensor.ConfigureFrameRate(static_cast<uint32_t>(options.fps));
         const visionarm::CameraFormat& camera_format = camera.format();
         if (camera_format.pixel_format != V4L2_PIX_FMT_NV12 ||
             camera_format.plane_count != 1U ||
@@ -416,7 +422,10 @@ int main(int argc, char** argv) {
         encoder_config.horizontal_stride =
             static_cast<int>(camera_format.bytes_per_line[0]);
         encoder_config.vertical_stride = vertical_stride;
-        encoder_config.fps_numerator = options.fps;
+        encoder_config.fps_numerator =
+            static_cast<int>(configured_sensor_fps.numerator);
+        encoder_config.fps_denominator =
+            static_cast<int>(configured_sensor_fps.denominator);
         encoder_config.bitrate_bps = options.bitrate;
         encoder_config.gop_length = options.gop;
         encoder_config.max_source_buffers = camera.buffer_count();

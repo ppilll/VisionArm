@@ -1,5 +1,6 @@
 #include "camera/capture_buffer_broker.h"
 #include "camera/v4l2_camera.h"
+#include "camera/v4l2_sensor_controller.h"
 #include "control/control_sink.h"
 #if defined(VISIONARM_HAS_UART_CONTROL)
 #include "control/uart_control_sink.h"
@@ -59,6 +60,7 @@ const char* ControlBackendName(ControlBackend backend) noexcept {
 
 struct Options {
     std::string device;
+    std::string sensor_subdev = "/dev/v4l-subdev2";
     std::string model;
     std::string output;
     std::string report;
@@ -95,7 +97,8 @@ struct Options {
 [[noreturn]] void Usage(const char* program) {
     std::cerr
         << "Usage: " << program << " \\\n"
-        << "  --device /dev/videoX --model model.rknn --output stream.h265 \\\n"
+        << "  --device /dev/videoX --sensor-subdev /dev/v4l-subdevX \\\n"
+        << "  --model model.rknn --output stream.h265 \\\n"
         << "  --width W --height H --fps FPS --bitrate BPS --gop N \\\n"
         << "  [--duration-sec N] [--buffers N] [--video-queue N] \\\n"
         << "  [--topology fused|split] [--input-slots N] [--output-slots N] \\\n"
@@ -129,6 +132,74 @@ int ParseNonnegativeInt(const char* text, const char* name) {
     return static_cast<int>(value);
 }
 
+int ParseCameraFps(const char* text) {
+    const int fps = ParsePositiveInt(text, "fps");
+    if (!visionarm::V4L2SensorController::IsAllowedProductFps(
+            static_cast<uint32_t>(fps))) {
+        throw std::invalid_argument(
+            "unsupported fps; allowed values are 30, 60, 90");
+    }
+    return fps;
+}
+
+struct ProductCameraMode {
+    int width;
+    int height;
+    int fps;
+};
+
+constexpr std::array<ProductCameraMode, 6> kEnabledCameraModes{{
+    {1920, 1080, 30},
+    {2560, 1440, 30},
+    {3840, 2160, 30},
+    {1920, 1080, 60},
+    {2560, 1440, 60},
+    {3840, 2160, 60},
+}};
+
+[[nodiscard]] bool IsProductOutputResolution(int width, int height) noexcept {
+    return
+        (width == 1920 && height == 1080) ||
+        (width == 2560 && height == 1440) ||
+        (width == 3840 && height == 2160);
+}
+
+[[nodiscard]] bool IsEnabledCameraMode(
+    int width,
+    int height,
+    int fps) noexcept {
+
+    return std::any_of(
+        kEnabledCameraModes.begin(),
+        kEnabledCameraModes.end(),
+        [&](const ProductCameraMode& mode) {
+            return mode.width == width &&
+                   mode.height == height &&
+                   mode.fps == fps;
+        });
+}
+
+void ValidateCameraMode(const Options& options) {
+    if (!IsProductOutputResolution(options.width, options.height)) {
+        throw std::invalid_argument(
+            "unsupported resolution; supported output resolutions are "
+            "1920x1080, 2560x1440, 3840x2160");
+    }
+
+    if (options.fps == 90) {
+        throw std::invalid_argument(
+            "90 fps is a reserved product rate but is not enabled in the "
+            "current V8.1 capability matrix; complete 90 fps sensor/BSP "
+            "bring-up before enabling it");
+    }
+
+    if (!IsEnabledCameraMode(options.width, options.height, options.fps)) {
+        throw std::invalid_argument(
+            "unsupported camera mode; enabled modes are "
+            "1920x1080@30/60, 2560x1440@30/60, 3840x2160@30/60");
+    }
+}
+
 Options ParseOptions(int argc, char** argv) {
     Options options;
     for (int index = 1; index < argc; ++index) {
@@ -139,12 +210,13 @@ Options ParseOptions(int argc, char** argv) {
         };
 
         if (key == "--device") options.device = next();
+        else if (key == "--sensor-subdev") options.sensor_subdev = next();
         else if (key == "--model") options.model = next();
         else if (key == "--output") options.output = next();
         else if (key == "--report") options.report = next();
         else if (key == "--width") options.width = ParsePositiveInt(next(), "width");
         else if (key == "--height") options.height = ParsePositiveInt(next(), "height");
-        else if (key == "--fps") options.fps = ParsePositiveInt(next(), "fps");
+        else if (key == "--fps") options.fps = ParseCameraFps(next());
         else if (key == "--buffers") options.buffers = ParsePositiveInt(next(), "buffers");
         else if (key == "--duration-sec") options.duration_seconds = ParsePositiveInt(next(), "duration");
         else if (key == "--timeout-ms") options.timeout_ms = ParsePositiveInt(next(), "timeout");
@@ -203,6 +275,10 @@ Options ParseOptions(int argc, char** argv) {
         options.height <= 0 || options.fps <= 0 ||
         options.bitrate <= 0 || options.gop <= 0) {
         Usage(argv[0]);
+    }
+    ValidateCameraMode(options);
+    if (options.sensor_subdev.empty()) {
+        throw std::invalid_argument("sensor subdev must not be empty");
     }
     if (options.control_backend == ControlBackend::UART &&
         options.uart_device.empty()) {
@@ -450,7 +526,6 @@ int main(int argc, char** argv) {
         camera_config.width = static_cast<uint32_t>(options.width);
         camera_config.height = static_cast<uint32_t>(options.height);
         camera_config.pixel_format = V4L2_PIX_FMT_NV12;
-        camera_config.fps = static_cast<uint32_t>(options.fps);
         camera_config.buffer_count = static_cast<uint32_t>(options.buffers);
         camera_config.timeout_ms = options.timeout_ms;
         camera_config.export_dmabuf = true;
@@ -458,6 +533,15 @@ int main(int argc, char** argv) {
 
         visionarm::V4L2Camera camera(camera_config);
         camera.Open();
+
+        visionarm::V4L2SensorControllerConfig sensor_config;
+        sensor_config.device = options.sensor_subdev;
+        sensor_config.pad = 0U;
+        const visionarm::V4L2SensorController sensor_controller(sensor_config);
+        const visionarm::SensorFrameRate configured_sensor_fps =
+            sensor_controller.ConfigureFrameRate(
+                static_cast<uint32_t>(options.fps));
+
         const visionarm::CameraFormat camera_format = camera.format();
         if (camera_format.pixel_format != V4L2_PIX_FMT_NV12 ||
             camera_format.plane_count != 1U ||
@@ -465,6 +549,18 @@ int main(int argc, char** argv) {
             throw std::runtime_error(
                 "R7/R8 requires frozen single-plane linear NV12");
         }
+
+        std::cout << "camera requested="
+                  << options.width << 'x' << options.height
+                  << '@' << options.fps
+                  << " sensor_subdev=" << options.sensor_subdev
+                  << " configured_sensor_fps="
+                  << configured_sensor_fps.numerator << '/'
+                  << configured_sensor_fps.denominator
+                  << " isp_output=" << camera_format.width << 'x'
+                  << camera_format.height << ' '
+                  << visionarm::FourccToString(camera_format.pixel_format)
+                  << '\n';
 
         visionarm::RknnEngineConfig engine_config;
         engine_config.model_path = options.model;
@@ -517,7 +613,16 @@ int main(int argc, char** argv) {
             static_cast<int>(camera_format.bytes_per_line[0]);
         encoder_config.vertical_stride =
             DeriveVerticalStride(camera_format, options.vertical_stride);
-        encoder_config.fps_numerator = options.fps;
+        if (configured_sensor_fps.numerator >
+                static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+            configured_sensor_fps.denominator >
+                static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+            throw std::runtime_error("configured sensor fps exceeds MPP range");
+        }
+        encoder_config.fps_numerator =
+            static_cast<int>(configured_sensor_fps.numerator);
+        encoder_config.fps_denominator =
+            static_cast<int>(configured_sensor_fps.denominator);
         encoder_config.bitrate_bps = options.bitrate;
         encoder_config.gop_length = options.gop;
         encoder_config.max_source_buffers = camera.buffer_count();
@@ -717,6 +822,16 @@ int main(int argc, char** argv) {
         report << "topology="
                << visionarm::InferenceThreadTopologyName(stats.topology)
                << '\n';
+        report << "camera_requested_width=" << options.width << '\n';
+        report << "camera_requested_height=" << options.height << '\n';
+        report << "camera_requested_fps=" << options.fps << '\n';
+        report << "camera_sensor_subdev=" << options.sensor_subdev << '\n';
+        report << "camera_configured_fps_numerator="
+               << configured_sensor_fps.numerator << '\n';
+        report << "camera_configured_fps_denominator="
+               << configured_sensor_fps.denominator << '\n';
+        report << "camera_isp_width=" << camera_format.width << '\n';
+        report << "camera_isp_height=" << camera_format.height << '\n';
         report << "model_input_width=" << kModelWidth << '\n';
         report << "model_input_height=" << kModelHeight << '\n';
         report << "input_slots=" << options.input_slots << '\n';

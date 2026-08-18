@@ -1,5 +1,6 @@
 #include "camera/dmabuf_cpu_sync.h"
 #include "camera/v4l2_camera.h"
+#include "camera/v4l2_sensor_controller.h"
 #include "camera/v4l2_dmabuf_contract.h"
 
 #include <algorithm>
@@ -19,6 +20,7 @@ namespace {
 
 struct Options {
     std::string device;
+    std::string sensor_subdev = "/dev/v4l-subdev2";
     uint32_t width = 0U;
     uint32_t height = 0U;
     uint32_t pixel_format = 0U;
@@ -52,7 +54,8 @@ int ParseInt(const std::string& text, const char* name) {
 void PrintUsage(const char* program) {
     std::cerr
         << "Usage: " << program << " --device /dev/videoX --width N --height N"
-        << " --format NV12|NM12 --fps N [options]\n"
+        << " --format NV12|NM12 --fps 30|60|90 [options]\n"
+        << "  --sensor-subdev PATH    sensor subdev (default /dev/v4l-subdev2)\n"
         << "Options:\n"
         << "  --buffers N             requested V4L2 buffer count (default 6)\n"
         << "  --frames N              frames to validate (default 120)\n"
@@ -75,6 +78,8 @@ Options ParseOptions(int argc, char** argv) {
 
         if (arg == "--device") {
             options.device = require_value("--device");
+        } else if (arg == "--sensor-subdev") {
+            options.sensor_subdev = require_value("--sensor-subdev");
         } else if (arg == "--width") {
             options.width = ParseUint32(require_value("--width"), "width");
         } else if (arg == "--height") {
@@ -150,7 +155,6 @@ int Run(const Options& options) {
     config.width = options.width;
     config.height = options.height;
     config.pixel_format = options.pixel_format;
-    config.fps = options.fps;
     config.buffer_count = options.buffers;
     config.timeout_ms = options.timeout_ms;
     config.nonblocking = true;
@@ -160,6 +164,12 @@ int Run(const Options& options) {
 
     visionarm::V4L2Camera camera(config);
     camera.Open();
+
+    visionarm::V4L2SensorController sensor({options.sensor_subdev, 0U});
+    const visionarm::SensorFrameRate configured_fps =
+        sensor.ConfigureFrameRate(options.fps);
+    std::cout << "sensor_fps=" << configured_fps.numerator << '/'
+              << configured_fps.denominator << '\n';
 
     const visionarm::V4L2DmabufInventory inventory =
         camera.GetDmabufInventory();

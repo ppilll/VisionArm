@@ -69,7 +69,7 @@ void V4L2Camera::Open() {
     }
     if (config_.device.empty() || config_.width == 0U ||
         config_.height == 0U || config_.pixel_format == 0U ||
-        config_.fps == 0U || config_.buffer_count < 2U ||
+        config_.buffer_count < 2U ||
         config_.timeout_ms <= 0) {
         throw std::invalid_argument("invalid V4L2 camera configuration");
     }
@@ -79,7 +79,6 @@ void V4L2Camera::Open() {
         CreateWakeEvent();
         QueryCapabilities();
         ConfigureFormat();
-        ConfigureFrameRate();
         InitializeMmapAndExport();
         opened_ = true;
     } catch (...) {
@@ -216,31 +215,6 @@ void V4L2Camera::ConfigureFormat() {
     }
 
     format_.plane_count = plane_count_;
-}
-
-void V4L2Camera::ConfigureFrameRate() {
-    v4l2_streamparm parameters{};
-    parameters.type = buffer_type_;
-    parameters.parm.capture.timeperframe.numerator = 1U;
-    parameters.parm.capture.timeperframe.denominator = config_.fps;
-    (void)Xioctl(fd_, VIDIOC_S_PARM, &parameters);
-
-    parameters = {};
-    parameters.type = buffer_type_;
-    if (Xioctl(fd_, VIDIOC_G_PARM, &parameters) != 0) {
-        return;
-    }
-
-    const uint32_t numerator =
-        parameters.parm.capture.timeperframe.numerator;
-    const uint32_t denominator =
-        parameters.parm.capture.timeperframe.denominator;
-
-    if (numerator != 0U && denominator != 0U) {
-        format_.fps = static_cast<double>(denominator) /
-                      static_cast<double>(numerator);
-        format_.fps_known = true;
-    }
 }
 
 void V4L2Camera::InitializeMmapAndExport() {

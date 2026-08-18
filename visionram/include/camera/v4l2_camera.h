@@ -18,7 +18,6 @@ struct V4L2CameraConfig {
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t pixel_format = 0;
-    uint32_t fps = 0;
     uint32_t buffer_count = 6;
     int timeout_ms = 2000;
     bool nonblocking = true;
@@ -40,9 +39,6 @@ struct CameraFormat {
     uint32_t ycbcr_encoding = 0;
     uint32_t quantization = 0;
     uint32_t transfer_function = 0;
-
-    bool fps_known = false;
-    double fps = 0.0;
 };
 
 [[nodiscard]] uint32_t FourccFromString(const std::string& text);
@@ -102,7 +98,6 @@ private:
     void CreateWakeEvent();
     void QueryCapabilities();
     void ConfigureFormat();
-    void ConfigureFrameRate();
     void InitializeMmapAndExport();
     void QueueAllBuffers();
     void StopStreaming() noexcept;
