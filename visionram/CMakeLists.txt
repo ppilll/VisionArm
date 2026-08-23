@@ -34,6 +34,18 @@ option(
     "Build the Rockchip MPP H.265 VideoLease branch"
     OFF)
 option(
+    VISIONARM_ENABLE_ALSA_AUDIO
+    "Build the ALSA PCM producer and V8.3 audio timeline path"
+    ON)
+option(
+    VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER
+    "Build the FFmpeg native AAC-LC encoder and standalone PCM->AAC probe"
+    OFF)
+option(
+    VISIONARM_ENABLE_FFMPEG_MP4_MUX
+    "Build the FFmpeg libavformat HEVC+AAC MP4 local recorder"
+    OFF)
+option(
     VISIONARM_ENABLE_UART_CONTROL
     "Build the integrated R6 UART control path"
     ON)
@@ -41,6 +53,11 @@ option(
     VISIONARM_BUILD_UART_BOARD_TESTS
     "Build real RK3588-to-MCU UART motor-control board tests"
     OFF)
+
+if(VISIONARM_ENABLE_FFMPEG_MP4_MUX AND NOT VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER)
+    message(FATAL_ERROR
+        "VISIONARM_ENABLE_FFMPEG_MP4_MUX requires VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER=ON")
+endif()
 
 if(VISIONARM_BUILD_UART_BOARD_TESTS AND NOT VISIONARM_ENABLE_UART_CONTROL)
     message(FATAL_ERROR
@@ -55,6 +72,206 @@ target_include_directories(
     visionarm_contract
     INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_library(
+    visionarm_media
+    STATIC
+        src/media/media_clock.cpp)
+add_library(visionarm::media ALIAS visionarm_media)
+target_link_libraries(
+    visionarm_media
+    PUBLIC
+        visionarm::contract
+        Threads::Threads)
+target_compile_options(
+    visionarm_media
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Wconversion
+        -Wshadow)
+
+if(VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER)
+    set(
+        FFMPEG_INCLUDE_DIR
+        ""
+        CACHE PATH
+        "Directory containing libavcodec/avcodec.h and libavutil headers")
+    set(
+        FFMPEG_AVCODEC_LIBRARY
+        ""
+        CACHE FILEPATH
+        "Full path to libavcodec.so")
+    set(
+        FFMPEG_AVUTIL_LIBRARY
+        ""
+        CACHE FILEPATH
+        "Full path to libavutil.so")
+
+    if(NOT FFMPEG_INCLUDE_DIR)
+        find_path(
+            FFMPEG_INCLUDE_DIR
+            NAMES libavcodec/avcodec.h)
+    endif()
+    if(NOT FFMPEG_AVCODEC_LIBRARY)
+        find_library(
+            FFMPEG_AVCODEC_LIBRARY
+            NAMES avcodec)
+    endif()
+    if(NOT FFMPEG_AVUTIL_LIBRARY)
+        find_library(
+            FFMPEG_AVUTIL_LIBRARY
+            NAMES avutil)
+    endif()
+
+    if(NOT FFMPEG_INCLUDE_DIR OR
+       NOT FFMPEG_AVCODEC_LIBRARY OR
+       NOT FFMPEG_AVUTIL_LIBRARY)
+        message(FATAL_ERROR
+            "VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER=ON requires FFmpeg libavcodec/libavutil development files. "
+            "Set FFMPEG_INCLUDE_DIR, FFMPEG_AVCODEC_LIBRARY, and FFMPEG_AVUTIL_LIBRARY if CMake cannot find the Buildroot staging files.")
+    endif()
+
+    add_library(
+        visionarm_audio_encoder
+        STATIC
+            src/audio/ffmpeg_aac_encoder.cpp
+            src/audio/audio_encode_worker.cpp
+            src/audio/encoded_audio_sink_worker.cpp)
+    add_library(visionarm::audio_encoder ALIAS visionarm_audio_encoder)
+    target_include_directories(
+        visionarm_audio_encoder
+        SYSTEM PRIVATE
+            ${FFMPEG_INCLUDE_DIR})
+    target_link_libraries(
+        visionarm_audio_encoder
+        PUBLIC
+            visionarm::contract
+        PRIVATE
+            ${FFMPEG_AVCODEC_LIBRARY}
+            ${FFMPEG_AVUTIL_LIBRARY})
+    target_compile_options(
+        visionarm_audio_encoder
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
+
+    add_executable(
+        audio_encode_probe
+        tools/audio_encode_probe.cpp)
+    target_link_libraries(
+        audio_encode_probe
+        PRIVATE
+            visionarm::audio_encoder)
+    target_compile_options(
+        audio_encode_probe
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
+endif()
+
+if(VISIONARM_ENABLE_FFMPEG_MP4_MUX)
+    set(
+        FFMPEG_AVFORMAT_LIBRARY
+        ""
+        CACHE FILEPATH
+        "Full path to libavformat.so")
+    if(NOT FFMPEG_AVFORMAT_LIBRARY)
+        find_library(
+            FFMPEG_AVFORMAT_LIBRARY
+            NAMES avformat)
+    endif()
+    if(NOT FFMPEG_AVFORMAT_LIBRARY)
+        message(FATAL_ERROR
+            "VISIONARM_ENABLE_FFMPEG_MP4_MUX=ON requires libavformat. "
+            "Set FFMPEG_AVFORMAT_LIBRARY to the Buildroot staging libavformat.so")
+    endif()
+
+    add_library(
+        visionarm_media_mux
+        STATIC
+            src/media/ffmpeg_mp4_muxer.cpp)
+    add_library(visionarm::media_mux ALIAS visionarm_media_mux)
+    target_include_directories(
+        visionarm_media_mux
+        SYSTEM PRIVATE
+            ${FFMPEG_INCLUDE_DIR})
+    target_link_libraries(
+        visionarm_media_mux
+        PUBLIC
+            visionarm::contract
+        PRIVATE
+            ${FFMPEG_AVFORMAT_LIBRARY}
+            ${FFMPEG_AVCODEC_LIBRARY}
+            ${FFMPEG_AVUTIL_LIBRARY})
+    target_compile_options(
+        visionarm_media_mux
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
+endif()
+
+if(VISIONARM_ENABLE_ALSA_AUDIO)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(ALSA QUIET IMPORTED_TARGET alsa)
+    endif()
+
+    if(NOT TARGET PkgConfig::ALSA)
+        find_path(ALSA_INCLUDE_DIR NAMES alsa/asoundlib.h)
+        find_library(ALSA_LIBRARY NAMES asound)
+        if(NOT ALSA_INCLUDE_DIR OR NOT ALSA_LIBRARY)
+            message(FATAL_ERROR
+                "VISIONARM_ENABLE_ALSA_AUDIO=ON but alsa-lib development files were not found")
+        endif()
+    endif()
+
+    add_library(
+        visionarm_audio_capture
+        STATIC
+            src/audio/alsa_capture.cpp
+            src/audio/audio_capture_worker.cpp)
+    add_library(visionarm::audio_capture ALIAS visionarm_audio_capture)
+    target_link_libraries(
+        visionarm_audio_capture
+        PUBLIC
+            visionarm::contract
+            visionarm::media
+            Threads::Threads)
+    if(TARGET PkgConfig::ALSA)
+        target_link_libraries(
+            visionarm_audio_capture
+            PUBLIC
+                PkgConfig::ALSA)
+    else()
+        target_include_directories(
+            visionarm_audio_capture
+            SYSTEM PRIVATE
+                ${ALSA_INCLUDE_DIR})
+        target_link_libraries(
+            visionarm_audio_capture
+            PRIVATE
+                ${ALSA_LIBRARY})
+    endif()
+    target_compile_options(
+        visionarm_audio_capture
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
+endif()
 
 # R6-L2 physically integrates the frozen R5 UART product sources into the V4
 # tree under include/uart and src/uart.  The library boundaries remain
@@ -415,8 +632,7 @@ if(VISIONARM_BUILD_RUNTIME AND VISIONARM_BUILD_ACCELERATION_TOOLS)
 
         add_executable(
             vision_pipeline_r7_r8_probe
-            tools/vision_pipeline_r7_r8_probe.cpp
-            src/metrics/v7_control_trace_recorder.cpp)
+            tools/vision_pipeline_r7_r8_probe.cpp)
         target_link_libraries(
             vision_pipeline_r7_r8_probe
             PRIVATE
@@ -430,6 +646,30 @@ if(VISIONARM_BUILD_RUNTIME AND VISIONARM_BUILD_ACCELERATION_TOOLS)
                 vision_pipeline_r7_r8_probe
                 PRIVATE
                     VISIONARM_HAS_UART_CONTROL=1)
+        endif()
+        if(VISIONARM_ENABLE_ALSA_AUDIO)
+            target_link_libraries(
+                vision_pipeline_r7_r8_probe
+                PRIVATE
+                    visionarm::audio_capture
+                    visionarm::media)
+            target_compile_definitions(
+                vision_pipeline_r7_r8_probe
+                PRIVATE
+                    VISIONARM_HAS_ALSA_AUDIO=1)
+        endif()
+        if(VISIONARM_ENABLE_ALSA_AUDIO AND
+           VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER AND
+           VISIONARM_ENABLE_FFMPEG_MP4_MUX)
+            target_link_libraries(
+                vision_pipeline_r7_r8_probe
+                PRIVATE
+                    visionarm::audio_encoder
+                    visionarm::media_mux)
+            target_compile_definitions(
+                vision_pipeline_r7_r8_probe
+                PRIVATE
+                    VISIONARM_HAS_AV_MUX=1)
         endif()
         target_compile_options(
             vision_pipeline_r7_r8_probe
@@ -530,14 +770,28 @@ if(VISIONARM_BUILD_TESTS)
             Threads::Threads)
 
     add_executable(
-        v7_control_trace_recorder_test
-        tests/v7_control_trace_recorder_test.cpp
-        src/metrics/v7_control_trace_recorder.cpp)
+        audio_chunk_contract_test
+        tests/audio_chunk_contract_test.cpp)
     target_link_libraries(
-        v7_control_trace_recorder_test
+        audio_chunk_contract_test
         PRIVATE
-            visionarm::contract
-            Threads::Threads)
+            visionarm::contract)
+
+    add_executable(
+        media_clock_test
+        tests/media_clock_test.cpp)
+    target_link_libraries(
+        media_clock_test
+        PRIVATE
+            visionarm::media)
+
+    add_executable(
+        encoded_audio_packet_contract_test
+        tests/encoded_audio_packet_contract_test.cpp)
+    target_link_libraries(
+        encoded_audio_packet_contract_test
+        PRIVATE
+            visionarm::contract)
 
     if(VISIONARM_ENABLE_UART_CONTROL)
         add_executable(
@@ -567,7 +821,9 @@ if(VISIONARM_BUILD_TESTS)
             target_state_machine_test
             latency_accumulator_test
             bounded_queue_metrics_test
-            v7_control_trace_recorder_test)
+            audio_chunk_contract_test
+            media_clock_test
+            encoded_audio_packet_contract_test)
         target_compile_options(
             ${test_target}
             PRIVATE
@@ -616,14 +872,22 @@ if(VISIONARM_BUILD_TESTS)
         NAME bounded_queue_metrics_test
         COMMAND bounded_queue_metrics_test)
     add_test(
-        NAME v7_control_trace_recorder_test
-        COMMAND v7_control_trace_recorder_test)
+        NAME audio_chunk_contract_test
+        COMMAND audio_chunk_contract_test)
+    add_test(
+        NAME media_clock_test
+        COMMAND media_clock_test)
+    add_test(
+        NAME encoded_audio_packet_contract_test
+        COMMAND encoded_audio_packet_contract_test)
 
     set_tests_properties(
         target_state_machine_test
         latency_accumulator_test
         bounded_queue_metrics_test
-        v7_control_trace_recorder_test
+        audio_chunk_contract_test
+        media_clock_test
+        encoded_audio_packet_contract_test
         PROPERTIES TIMEOUT 15)
 
     if(VISIONARM_ENABLE_UART_CONTROL)

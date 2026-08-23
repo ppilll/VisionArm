@@ -24,6 +24,10 @@ struct MppH265EncoderConfig {
 
     int fps_numerator = 30;
     int fps_denominator = 1;
+
+    // V8.3 common media epoch. When non-zero, MPP input/output PTS is the
+    // capture CLOCK_MONOTONIC timestamp minus this epoch.
+    int64_t media_epoch_monotonic_ns = 0;
     int bitrate_bps = 4'000'000;
     int gop_length = 60;
     int qp_min = 10;

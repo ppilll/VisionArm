@@ -1,13 +1,23 @@
 #include "camera/capture_buffer_broker.h"
 #include "camera/v4l2_camera.h"
 #include "camera/v4l2_sensor_controller.h"
+#include "common/monotonic_clock.h"
+#include "media/media_clock.h"
+#if defined(VISIONARM_HAS_ALSA_AUDIO)
+#include "audio/audio_capture_worker.h"
+#include "pipeline/bounded_queue.h"
+#endif
+#if defined(VISIONARM_HAS_AV_MUX)
+#include "audio/audio_encode_worker.h"
+#include "audio/encoded_audio_sink_worker.h"
+#include "media/ffmpeg_mp4_muxer.h"
+#endif
 #include "control/control_sink.h"
 #if defined(VISIONARM_HAS_UART_CONTROL)
 #include "control/uart_control_sink.h"
 #include "uart/uart_link.h"
 #endif
 #include "inference/rknn_engine.h"
-#include "metrics/v7_control_trace_recorder.h"
 #include "pipeline/inference_pipeline.h"
 #include "pipeline/latest_result_store.h"
 #include "pipeline/target_state_machine.h"
@@ -21,6 +31,7 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -31,6 +42,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -78,6 +90,20 @@ struct Options {
     int input_slots = 1;
     int output_slots = 1;
     int video_queue = 2;
+#if defined(VISIONARM_HAS_ALSA_AUDIO)
+    bool audio_enabled = true;
+#else
+    bool audio_enabled = false;
+#endif
+    std::string audio_device = "hw:1,0";
+    int audio_rate = 48'000;
+    int audio_channels = 2;
+    int audio_period_frames = 1'024;
+    int audio_buffer_frames = 4'096;
+    int audio_queue = 16;
+    int audio_encoded_queue = 32;
+    int audio_bitrate = 128'000;
+    std::string av_output;
     int acquire_hits = 2;
     int lost_misses = 3;
     int max_result_age_ms = 100;
@@ -88,8 +114,6 @@ struct Options {
     std::string uart_device = "/dev/ttyS3";
     int uart_baud = 115200;
     int uart_ready_timeout_ms = 5000;
-    std::string v7_control_csv;
-    std::string v7_status_csv;
     visionarm::InferenceThreadTopology topology =
         visionarm::InferenceThreadTopology::FUSED_NPU_POSTPROCESS;
 };
@@ -101,14 +125,18 @@ struct Options {
         << "  --model model.rknn --output stream.h265 \\\n"
         << "  --width W --height H --fps FPS --bitrate BPS --gop N \\\n"
         << "  [--duration-sec N] [--buffers N] [--video-queue N] \\\n"
+        << "  [--audio-device hw:1,0] [--audio-rate 48000] \\\n"
+        << "  [--audio-channels 2] [--audio-period-frames 1024] \\\n"
+        << "  [--audio-buffer-frames 4096] [--audio-queue 16] [--audio-disable] \\\n"
+        << "  [--av-output recording.mp4] [--audio-bitrate 128000] \\\n"
+        << "  [--audio-encoded-queue 32] \\\n"
         << "  [--topology fused|split] [--input-slots N] [--output-slots N] \\\n"
         << "  [--acquire-hits N] [--lost-misses N] \\\n"
         << "  [--max-result-age-ms N] [--latency-samples N] \\\n"
         << "  [--max-rss-growth-kb N] [--vertical-stride N] \\\n"
         << "  [--input-dma-heap PATH] [--confidence F] [--report PATH] \\\n"
         << "  [--control-backend mock|uart] [--uart-device /dev/ttyS3] \\\n"
-        << "  [--uart-baud 115200] [--uart-ready-timeout-ms 5000] \\\n"
-        << "  [--v7-control-csv control.csv] [--v7-status-csv status.csv]\n";
+        << "  [--uart-baud 115200] [--uart-ready-timeout-ms 5000]\n";
     std::exit(EXIT_FAILURE);
 }
 
@@ -220,6 +248,16 @@ Options ParseOptions(int argc, char** argv) {
         else if (key == "--gop") options.gop = ParsePositiveInt(next(), "gop");
         else if (key == "--vertical-stride") options.vertical_stride = ParsePositiveInt(next(), "vertical stride");
         else if (key == "--video-queue") options.video_queue = ParsePositiveInt(next(), "video queue");
+        else if (key == "--audio-device") options.audio_device = next();
+        else if (key == "--audio-rate") options.audio_rate = ParsePositiveInt(next(), "audio rate");
+        else if (key == "--audio-channels") options.audio_channels = ParsePositiveInt(next(), "audio channels");
+        else if (key == "--audio-period-frames") options.audio_period_frames = ParsePositiveInt(next(), "audio period frames");
+        else if (key == "--audio-buffer-frames") options.audio_buffer_frames = ParsePositiveInt(next(), "audio buffer frames");
+        else if (key == "--audio-queue") options.audio_queue = ParsePositiveInt(next(), "audio queue");
+        else if (key == "--audio-encoded-queue") options.audio_encoded_queue = ParsePositiveInt(next(), "encoded audio queue");
+        else if (key == "--audio-bitrate") options.audio_bitrate = ParsePositiveInt(next(), "audio bitrate");
+        else if (key == "--av-output") options.av_output = next();
+        else if (key == "--audio-disable") options.audio_enabled = false;
         else if (key == "--input-slots") options.input_slots = ParsePositiveInt(next(), "input slots");
         else if (key == "--output-slots") options.output_slots = ParsePositiveInt(next(), "output slots");
         else if (key == "--acquire-hits") options.acquire_hits = ParsePositiveInt(next(), "acquire hits");
@@ -246,10 +284,6 @@ Options ParseOptions(int argc, char** argv) {
         } else if (key == "--uart-ready-timeout-ms") {
             options.uart_ready_timeout_ms =
                 ParsePositiveInt(next(), "UART ready timeout");
-        } else if (key == "--v7-control-csv") {
-            options.v7_control_csv = next();
-        } else if (key == "--v7-status-csv") {
-            options.v7_status_csv = next();
         } else if (key == "--topology") {
             const std::string value = next();
             if (value == "fused") {
@@ -280,11 +314,40 @@ Options ParseOptions(int argc, char** argv) {
         options.uart_device.empty()) {
         throw std::invalid_argument("UART device must not be empty");
     }
-    if (!options.v7_status_csv.empty() &&
-        options.control_backend != ControlBackend::UART) {
-        throw std::invalid_argument(
-            "--v7-status-csv requires --control-backend uart");
+    if (options.audio_enabled) {
+        if (options.audio_device.rfind("hw:", 0) != 0) {
+            throw std::invalid_argument(
+                "audio device must be an hw: PCM for V8.3");
+        }
+        if (options.audio_rate != 48'000) {
+            throw std::invalid_argument(
+                "V8.3 frozen audio baseline requires 48000 Hz");
+        }
+        if (options.audio_channels != 2) {
+            throw std::invalid_argument(
+                "V8.3 frozen audio baseline requires 2 capture channels");
+        }
+        if (options.audio_buffer_frames < options.audio_period_frames) {
+            throw std::invalid_argument(
+                "audio buffer frames must be >= period frames");
+        }
     }
+#if !defined(VISIONARM_HAS_ALSA_AUDIO)
+    if (options.audio_enabled) {
+        throw std::invalid_argument(
+            "this binary was built without VISIONARM_ENABLE_ALSA_AUDIO");
+    }
+#endif
+    if (!options.av_output.empty() && !options.audio_enabled) {
+        throw std::invalid_argument(
+            "--av-output requires the frozen V8.3 audio path to be enabled");
+    }
+#if !defined(VISIONARM_HAS_AV_MUX)
+    if (!options.av_output.empty()) {
+        throw std::invalid_argument(
+            "this binary was built without VISIONARM_ENABLE_FFMPEG_MP4_MUX");
+    }
+#endif
 #if !defined(VISIONARM_HAS_UART_CONTROL)
     if (options.control_backend == ControlBackend::UART) {
         throw std::invalid_argument(
@@ -320,39 +383,6 @@ bool WaitForUartReady(
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     return false;
-}
-
-void WriteV7StatusCsvHeader(std::ofstream& output) {
-    output
-        << "host_steady_ns,link_state,mcu_state,remote_stop_latched,"
-        << "control_valid,last_rx_wire_sequence,last_control_wire_sequence,"
-        << "control_mailbox_overwrite_count,mcu_tick_ms,pan_command_q15,"
-        << "tilt_command_q15\n";
-}
-
-bool WriteV7StatusCsvRow(
-    std::ofstream& output,
-    const visionarm::uart::UartModuleSnapshot& snapshot) {
-    if (!snapshot.last_status.has_value()) {
-        return false;
-    }
-
-    const auto host_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    const auto& status = *snapshot.last_status;
-    output << host_ns << ','
-           << static_cast<unsigned int>(snapshot.state) << ','
-           << static_cast<unsigned int>(status.mcu_state) << ','
-           << static_cast<unsigned int>(status.remote_stop_latched) << ','
-           << static_cast<unsigned int>(status.control_valid) << ','
-           << status.last_rx_wire_sequence << ','
-           << status.last_control_wire_sequence << ','
-           << status.control_mailbox_overwrite_count << ','
-           << status.mcu_tick_ms << ','
-           << status.pan_stub_q15 << ','
-           << status.tilt_stub_q15 << '\n';
-    output.flush();
-    return static_cast<bool>(output);
 }
 #endif
 
@@ -476,6 +506,77 @@ struct RssSamples {
     }
 };
 
+
+#if defined(VISIONARM_HAS_ALSA_AUDIO)
+struct AudioTimelineProbeStats {
+    std::uint64_t chunks = 0U;
+    std::uint64_t frames = 0U;
+    std::uint64_t bytes = 0U;
+    std::uint64_t reanchors = 0U;
+    std::uint64_t discontinuities = 0U;
+    std::uint64_t pts_regressions = 0U;
+    std::uint64_t continuous_pts_mismatches = 0U;
+
+    std::int64_t first_pts_ns = -1;
+    std::int64_t last_pts_ns = -1;
+    std::int64_t last_end_pts_ns = -1;
+    std::int64_t maximum_forward_gap_ns = 0;
+    std::int64_t maximum_abs_timing_error_ns = 0;
+
+    void Consume(const visionarm::TimedAudioChunk& chunk) noexcept {
+        ++chunks;
+        frames += chunk.raw.timing.frame_count;
+        bytes += chunk.raw.pcm.size();
+        if (chunk.media.reanchored) {
+            ++reanchors;
+        }
+        if (chunk.raw.timing.discontinuity_before) {
+            ++discontinuities;
+        }
+
+        if (first_pts_ns < 0) {
+            first_pts_ns = chunk.media.pts_ns;
+        }
+
+        if (last_end_pts_ns >= 0) {
+            if (chunk.media.pts_ns < last_end_pts_ns) {
+                ++pts_regressions;
+            } else {
+                const std::int64_t gap_ns =
+                    chunk.media.pts_ns - last_end_pts_ns;
+                maximum_forward_gap_ns =
+                    std::max(maximum_forward_gap_ns, gap_ns);
+                if (!chunk.media.reanchored && gap_ns != 0) {
+                    ++continuous_pts_mismatches;
+                }
+            }
+        }
+
+        const std::int64_t abs_error_ns =
+            chunk.media.timing_error_ns < 0
+                ? -chunk.media.timing_error_ns
+                : chunk.media.timing_error_ns;
+        maximum_abs_timing_error_ns =
+            std::max(maximum_abs_timing_error_ns, abs_error_ns);
+        last_pts_ns = chunk.media.pts_ns;
+        last_end_pts_ns =
+            chunk.media.pts_ns + chunk.media.duration_ns;
+    }
+};
+
+void DrainAudioQueue(
+    visionarm::BoundedQueue<visionarm::TimedAudioChunk>* queue,
+    AudioTimelineProbeStats* stats) {
+    if (queue == nullptr || stats == nullptr) {
+        return;
+    }
+    visionarm::TimedAudioChunk chunk;
+    while (queue->TryPop(&chunk)) {
+        stats->Consume(chunk);
+    }
+}
+#endif
+
 void WriteLatency(
     std::ostream& stream,
     const char* name,
@@ -508,6 +609,51 @@ bool QueueBounded(const visionarm::QueueStatsSnapshot& value) noexcept {
         value.high_watermark <= value.capacity &&
         value.current_size <= value.capacity;
 }
+
+#if defined(VISIONARM_HAS_AV_MUX)
+class TeeEncodedVideoSink final : public visionarm::IEncodedPacketSink {
+public:
+    TeeEncodedVideoSink(
+        visionarm::IEncodedPacketSink* primary,
+        visionarm::IEncodedPacketSink* secondary)
+        : primary_(primary), secondary_(secondary) {
+        if (primary_ == nullptr || secondary_ == nullptr) {
+            throw std::invalid_argument("TeeEncodedVideoSink requires two sinks");
+        }
+    }
+
+    [[nodiscard]] bool Write(
+        const visionarm::EncodedPacket& packet) noexcept override {
+        const bool primary_ok = primary_->Write(packet);
+        const bool secondary_ok = secondary_->Write(packet);
+        return primary_ok && secondary_ok;
+    }
+
+    void Flush() noexcept override {
+        primary_->Flush();
+        secondary_->Flush();
+    }
+
+private:
+    visionarm::IEncodedPacketSink* primary_ = nullptr;
+    visionarm::IEncodedPacketSink* secondary_ = nullptr;
+};
+
+std::vector<std::uint8_t> ConcatenateCodecConfig(
+    const std::vector<visionarm::EncodedPacket>& packets) {
+    std::vector<std::uint8_t> result;
+    for (const auto& packet : packets) {
+        if (!packet.codec_config || packet.bytes.empty()) {
+            continue;
+        }
+        result.insert(result.end(), packet.bytes.begin(), packet.bytes.end());
+    }
+    if (result.empty()) {
+        throw std::runtime_error("MPP did not provide HEVC VPS/SPS/PPS codec config");
+    }
+    return result;
+}
+#endif
 
 }  // namespace
 
@@ -602,34 +748,6 @@ int main(int argc, char** argv) {
         broker_config.requeue_ready_notifier = [&camera] { camera.Wake(); };
         visionarm::CaptureBufferBroker broker(broker_config);
 
-        visionarm::MppH265EncoderConfig encoder_config;
-        encoder_config.width = static_cast<int>(camera_format.width);
-        encoder_config.height = static_cast<int>(camera_format.height);
-        encoder_config.horizontal_stride =
-            static_cast<int>(camera_format.bytes_per_line[0]);
-        encoder_config.vertical_stride =
-            DeriveVerticalStride(camera_format, options.vertical_stride);
-        if (configured_sensor_fps.numerator >
-                static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-            configured_sensor_fps.denominator >
-                static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-            throw std::runtime_error("configured sensor fps exceeds MPP range");
-        }
-        encoder_config.fps_numerator =
-            static_cast<int>(configured_sensor_fps.numerator);
-        encoder_config.fps_denominator =
-            static_cast<int>(configured_sensor_fps.denominator);
-        encoder_config.bitrate_bps = options.bitrate;
-        encoder_config.gop_length = options.gop;
-        encoder_config.max_source_buffers = camera.buffer_count();
-
-        visionarm::MppH265Encoder encoder;
-        encoder.Initialize(encoder_config);
-        visionarm::H265FileSink file_sink(options.output);
-        if (!file_sink.opened()) {
-            throw std::runtime_error("failed to open output H.265 file");
-        }
-
         visionarm::LatestResultStore latest_perception;
         visionarm::MockControlSink mock_control_sink;
         visionarm::IControlSink* selected_control_sink = &mock_control_sink;
@@ -667,33 +785,6 @@ int main(int argc, char** argv) {
         }
 #endif
 
-        std::unique_ptr<visionarm::V7ControlTraceRecorder> v7_control_trace;
-        if (!options.v7_control_csv.empty()) {
-            v7_control_trace =
-                std::make_unique<visionarm::V7ControlTraceRecorder>(
-                    *selected_control_sink, options.v7_control_csv);
-            selected_control_sink = v7_control_trace.get();
-            std::cout << "V7 control trace=" << options.v7_control_csv << '\n';
-        }
-
-#if defined(VISIONARM_HAS_UART_CONTROL)
-        std::ofstream v7_status_trace;
-        std::optional<uint32_t> v7_last_status_tick;
-        if (!options.v7_status_csv.empty()) {
-            v7_status_trace.open(options.v7_status_csv, std::ios::trunc);
-            if (!v7_status_trace) {
-                throw std::runtime_error("failed to open V7 status trace CSV");
-            }
-            WriteV7StatusCsvHeader(v7_status_trace);
-            v7_status_trace.flush();
-            if (!v7_status_trace) {
-                throw std::runtime_error(
-                    "failed to initialize V7 status trace CSV");
-            }
-            std::cout << "V7 MCU status trace=" << options.v7_status_csv << '\n';
-        }
-#endif
-
         visionarm::TargetStateMachineConfig state_config;
         state_config.acquire_hits =
             static_cast<uint32_t>(options.acquire_hits);
@@ -703,6 +794,132 @@ int main(int argc, char** argv) {
             static_cast<int64_t>(options.max_result_age_ms) * 1'000'000LL;
         visionarm::TargetStateMachine state_machine(
             state_config, selected_control_sink, &latest_perception);
+
+        // V8.3 common CLOCK_MONOTONIC media epoch. Both MPP video PTS and
+        // audio sample-clock PTS are expressed relative to this value.
+        visionarm::MediaClock media_clock(visionarm::MonotonicNowNs());
+
+        visionarm::MppH265EncoderConfig encoder_config;
+        encoder_config.width = static_cast<int>(camera_format.width);
+        encoder_config.height = static_cast<int>(camera_format.height);
+        encoder_config.horizontal_stride =
+            static_cast<int>(camera_format.bytes_per_line[0]);
+        encoder_config.vertical_stride =
+            DeriveVerticalStride(camera_format, options.vertical_stride);
+        if (configured_sensor_fps.numerator >
+                static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+            configured_sensor_fps.denominator >
+                static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+            throw std::runtime_error("configured sensor fps exceeds MPP range");
+        }
+        encoder_config.fps_numerator =
+            static_cast<int>(configured_sensor_fps.numerator);
+        encoder_config.fps_denominator =
+            static_cast<int>(configured_sensor_fps.denominator);
+        encoder_config.media_epoch_monotonic_ns =
+            media_clock.epoch_monotonic_ns();
+        encoder_config.bitrate_bps = options.bitrate;
+        encoder_config.gop_length = options.gop;
+        encoder_config.max_source_buffers = camera.buffer_count();
+
+        visionarm::MppH265Encoder encoder;
+        encoder.Initialize(encoder_config);
+        std::cerr << "startup stage=mpp_ready" << '\n';
+        visionarm::H265FileSink file_sink(options.output);
+        if (!file_sink.opened()) {
+            throw std::runtime_error("failed to open output H.265 file");
+        }
+        std::cerr << "startup stage=h265_sink_ready" << '\n';
+        visionarm::IEncodedPacketSink* selected_video_sink = &file_sink;
+
+#if defined(VISIONARM_HAS_ALSA_AUDIO)
+        visionarm::BoundedQueue<visionarm::TimedAudioChunk> audio_pcm_queue(
+            static_cast<std::size_t>(options.audio_queue));
+        AudioTimelineProbeStats audio_timeline_stats;
+        std::unique_ptr<visionarm::AudioCaptureWorker> audio_worker;
+#endif
+
+#if defined(VISIONARM_HAS_AV_MUX)
+        const bool av_mux_enabled = !options.av_output.empty();
+        std::unique_ptr<visionarm::BoundedQueue<visionarm::EncodedAudioPacket>>
+            audio_encoded_queue;
+        std::unique_ptr<visionarm::FfmpegMp4Muxer> av_muxer;
+        std::unique_ptr<visionarm::AudioEncodeWorker> audio_encode_worker;
+        std::unique_ptr<visionarm::EncodedAudioSinkWorker> audio_sink_worker;
+        std::unique_ptr<TeeEncodedVideoSink> tee_video_sink;
+
+        if (av_mux_enabled) {
+            std::cerr << "startup stage=av_mux_path_begin" << '\n';
+            audio_encoded_queue = std::make_unique<
+                visionarm::BoundedQueue<visionarm::EncodedAudioPacket>>(
+                    static_cast<std::size_t>(options.audio_encoded_queue));
+
+            visionarm::FfmpegAacEncoderConfig audio_encoder_config;
+            audio_encoder_config.input_format.sample_rate_hz =
+                static_cast<std::uint32_t>(options.audio_rate);
+            audio_encoder_config.input_format.channels =
+                static_cast<std::uint16_t>(options.audio_channels);
+            audio_encoder_config.input_format.sample_format =
+                visionarm::AudioSampleFormat::kS16LE;
+            audio_encoder_config.bit_rate_bps = options.audio_bitrate;
+
+            std::cerr << "startup stage=audio_encode_worker_construct" << '\n';
+            audio_encode_worker = std::make_unique<visionarm::AudioEncodeWorker>(
+                audio_encoder_config,
+                &audio_pcm_queue,
+                audio_encoded_queue.get(),
+                [&audio_timeline_stats](const visionarm::TimedAudioChunk& chunk) {
+                    audio_timeline_stats.Consume(chunk);
+                });
+            std::string audio_encode_error;
+            std::cerr << "startup stage=audio_encode_worker_start" << '\n';
+            if (!audio_encode_worker->Start(&audio_encode_error)) {
+                throw std::runtime_error(
+                    "audio encoder Start failed: " + audio_encode_error);
+            }
+
+            std::cerr << "startup stage=audio_encode_worker_ready" << '\n';
+            visionarm::FfmpegMp4MuxerConfig mux_config;
+            mux_config.path = options.av_output;
+            mux_config.video_width = static_cast<std::int32_t>(camera_format.width);
+            mux_config.video_height = static_cast<std::int32_t>(camera_format.height);
+            mux_config.video_bit_rate_bps = options.bitrate;
+            mux_config.video_fps_numerator =
+                static_cast<std::int32_t>(configured_sensor_fps.numerator);
+            mux_config.video_fps_denominator =
+                static_cast<std::int32_t>(configured_sensor_fps.denominator);
+            std::cerr << "startup stage=hevc_codec_config_copy" << '\n';
+            mux_config.hevc_annexb_codec_config =
+                ConcatenateCodecConfig(encoder.CodecConfigPackets());
+            mux_config.audio = audio_encode_worker->stream_info();
+            std::cerr << "startup stage=mux_config_ready hevc_extradata_bytes="
+                      << mux_config.hevc_annexb_codec_config.size()
+                      << " aac_extradata_bytes=" << mux_config.audio.codec_config.size()
+                      << '\n';
+
+            av_muxer = std::make_unique<visionarm::FfmpegMp4Muxer>();
+            std::cerr << "startup stage=mp4_mux_initialize" << '\n';
+            av_muxer->Initialize(mux_config);
+            std::cerr << "startup stage=mp4_mux_ready" << '\n';
+
+            audio_sink_worker =
+                std::make_unique<visionarm::EncodedAudioSinkWorker>(
+                    audio_encoded_queue.get(), av_muxer.get());
+            std::string audio_sink_error;
+            if (!audio_sink_worker->Start(&audio_sink_error)) {
+                throw std::runtime_error(
+                    "encoded audio sink Start failed: " + audio_sink_error);
+            }
+
+            tee_video_sink = std::make_unique<TeeEncodedVideoSink>(
+                &file_sink, av_muxer.get());
+            selected_video_sink = tee_video_sink.get();
+            std::cout << "local A/V mux enabled output=" << options.av_output
+                      << " audio_bitrate=" << options.audio_bitrate
+                      << " encoded_audio_queue=" << options.audio_encoded_queue
+                      << '\n';
+        }
+#endif
 
         visionarm::InferencePipelineConfig pipeline_config;
         pipeline_config.enable_video = true;
@@ -727,7 +944,43 @@ int main(int argc, char** argv) {
             &postprocessor,
             &state_machine,
             &encoder,
-            &file_sink);
+            selected_video_sink);
+
+#if defined(VISIONARM_HAS_ALSA_AUDIO)
+        if (options.audio_enabled) {
+            visionarm::AlsaCaptureConfig audio_config;
+            audio_config.device = options.audio_device;
+            audio_config.sample_rate_hz =
+                static_cast<std::uint32_t>(options.audio_rate);
+            audio_config.channels =
+                static_cast<std::uint16_t>(options.audio_channels);
+            audio_config.sample_format =
+                visionarm::AudioSampleFormat::kS16LE;
+            audio_config.period_frames =
+                static_cast<std::uint32_t>(options.audio_period_frames);
+            audio_config.buffer_frames =
+                static_cast<std::uint32_t>(options.audio_buffer_frames);
+            audio_config.require_exact_hw_params = true;
+
+            audio_worker = std::make_unique<visionarm::AudioCaptureWorker>(
+                audio_config, &media_clock, &audio_pcm_queue);
+            std::string audio_error;
+            if (!audio_worker->Start(&audio_error)) {
+                throw std::runtime_error(
+                    "audio capture Start failed: " + audio_error);
+            }
+            const auto audio_start = audio_worker->Snapshot();
+            std::cout << "audio device=" << audio_start.capture_info.device
+                      << " rate=" << audio_start.capture_info.format.sample_rate_hz
+                      << " channels=" << audio_start.capture_info.format.channels
+                      << " period_frames=" << audio_start.capture_info.period_frames
+                      << " buffer_frames=" << audio_start.capture_info.buffer_frames
+                      << " timestamp=" << audio_start.capture_info.timestamp_type
+                      << " queue_capacity=" << options.audio_queue
+                      << " media_epoch_ns=" << media_clock.epoch_monotonic_ns()
+                      << '\n';
+        }
+#endif
 
         if (!pipeline.Start()) {
             throw std::runtime_error("pipeline Start failed");
@@ -739,41 +992,69 @@ int main(int argc, char** argv) {
             std::chrono::seconds(options.duration_seconds);
         auto next_rss_sample = std::chrono::steady_clock::now() +
             std::chrono::seconds(1);
-#if defined(VISIONARM_HAS_UART_CONTROL)
-        auto next_v7_status_sample = std::chrono::steady_clock::now();
-#endif
         while (!g_stop.load(std::memory_order_acquire) &&
                std::chrono::steady_clock::now() < deadline &&
                pipeline.running()) {
+#if defined(VISIONARM_HAS_ALSA_AUDIO)
+            if (options.audio_enabled) {
+#if defined(VISIONARM_HAS_AV_MUX)
+                if (!av_mux_enabled) {
+                    DrainAudioQueue(&audio_pcm_queue, &audio_timeline_stats);
+                }
+                if (av_mux_enabled &&
+                    (audio_encode_worker->Snapshot().fatal_error ||
+                     audio_sink_worker->Snapshot().fatal_error ||
+                     av_muxer->Snapshot().fatal_error)) {
+                    break;
+                }
+#else
+                DrainAudioQueue(&audio_pcm_queue, &audio_timeline_stats);
+#endif
+                if (audio_worker->Snapshot().fatal_error) {
+                    break;
+                }
+            }
+#endif
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= next_rss_sample) {
+            if (std::chrono::steady_clock::now() >= next_rss_sample) {
                 rss.Add(ReadVmRssKb());
                 next_rss_sample += std::chrono::seconds(1);
             }
-#if defined(VISIONARM_HAS_UART_CONTROL)
-            if (uart_link != nullptr && v7_status_trace.is_open() &&
-                now >= next_v7_status_sample) {
-                const auto snapshot = uart_link->GetSnapshot();
-                if (snapshot.last_status.has_value()) {
-                    const uint32_t tick = snapshot.last_status->mcu_tick_ms;
-                    if (!v7_last_status_tick.has_value() ||
-                        tick != *v7_last_status_tick) {
-                        if (!WriteV7StatusCsvRow(v7_status_trace, snapshot)) {
-                            throw std::runtime_error(
-                                "failed to write V7 status trace CSV");
-                        }
-                        v7_last_status_tick = tick;
-                    }
-                }
-                next_v7_status_sample = now + std::chrono::milliseconds(50);
-            }
-#endif
         }
         pipeline.Stop();
-        if (v7_control_trace != nullptr) {
-            v7_control_trace->Stop();
+#if defined(VISIONARM_HAS_ALSA_AUDIO)
+        std::optional<visionarm::AudioCaptureWorkerSnapshot> audio_worker_stats;
+#if defined(VISIONARM_HAS_AV_MUX)
+        std::optional<visionarm::AudioEncodeWorkerSnapshot> audio_encode_stats;
+        std::optional<visionarm::EncodedAudioSinkWorkerSnapshot> audio_sink_stats;
+        std::optional<visionarm::FfmpegMp4MuxerSnapshot> av_mux_stats;
+        visionarm::QueueStatsSnapshot audio_encoded_queue_stats;
+        bool av_mux_finalize_ok = true;
+#endif
+        if (options.audio_enabled) {
+            audio_worker->Stop();
+#if defined(VISIONARM_HAS_AV_MUX)
+            if (av_mux_enabled) {
+                audio_encode_worker->Stop();
+                audio_sink_worker->Stop();
+                av_mux_finalize_ok = av_muxer->Finalize();
+                audio_encode_stats = audio_encode_worker->Snapshot();
+                audio_sink_stats = audio_sink_worker->Snapshot();
+                av_mux_stats = av_muxer->Snapshot();
+                audio_encoded_queue_stats = audio_encoded_queue->Snapshot();
+            } else {
+                DrainAudioQueue(&audio_pcm_queue, &audio_timeline_stats);
+            }
+#else
+            DrainAudioQueue(&audio_pcm_queue, &audio_timeline_stats);
+#endif
+            audio_worker_stats = audio_worker->Snapshot();
         }
+        const visionarm::QueueStatsSnapshot audio_queue_stats =
+            audio_pcm_queue.Snapshot();
+#endif
+        const visionarm::MediaClockSnapshot media_clock_stats =
+            media_clock.Snapshot();
         rss.Add(ReadVmRssKb());
 
         const visionarm::PipelineStatsSnapshot stats = pipeline.stats();
@@ -789,10 +1070,6 @@ int main(int argc, char** argv) {
             state_machine.Snapshot();
         const visionarm::MockControlSinkSnapshot mock_control_stats =
             mock_control_sink.Snapshot();
-        std::optional<visionarm::V7ControlTraceStats> v7_trace_stats;
-        if (v7_control_trace != nullptr) {
-            v7_trace_stats = v7_control_trace->Snapshot();
-        }
 
 #if defined(VISIONARM_HAS_UART_CONTROL)
         std::optional<visionarm::UartControlSinkSnapshot> uart_control_stats;
@@ -828,6 +1105,134 @@ int main(int argc, char** argv) {
                << configured_sensor_fps.denominator << '\n';
         report << "camera_isp_width=" << camera_format.width << '\n';
         report << "camera_isp_height=" << camera_format.height << '\n';
+        report << "media_epoch_monotonic_ns="
+               << media_clock_stats.media_epoch_monotonic_ns << '\n';
+#if defined(VISIONARM_HAS_ALSA_AUDIO)
+        report << "audio_enabled=" << (options.audio_enabled ? 1 : 0) << '\n';
+        if (options.audio_enabled && audio_worker_stats.has_value()) {
+            const auto& audio = *audio_worker_stats;
+            report << "audio_device=" << audio.capture_info.device << '\n';
+            report << "audio_rate_hz="
+                   << audio.capture_info.format.sample_rate_hz << '\n';
+            report << "audio_channels="
+                   << audio.capture_info.format.channels << '\n';
+            report << "audio_period_frames="
+                   << audio.capture_info.period_frames << '\n';
+            report << "audio_buffer_frames="
+                   << audio.capture_info.buffer_frames << '\n';
+            report << "audio_timestamp_type="
+                   << audio.capture_info.timestamp_type << '\n';
+            report << "audio_worker_started=" << (audio.started ? 1 : 0) << '\n';
+            report << "audio_worker_fatal_error="
+                   << (audio.fatal_error ? 1 : 0) << '\n';
+            report << "audio_worker_last_error=" << audio.last_error << '\n';
+            report << "audio_timed_chunks=" << audio.timed_chunks << '\n';
+            report << "audio_timed_frames=" << audio.timed_frames << '\n';
+            report << "audio_timed_bytes=" << audio.timed_bytes << '\n';
+            report << "audio_queue_push_failures="
+                   << audio.queue_push_failures << '\n';
+            report << "audio_xruns=" << audio.capture.xrun_count << '\n';
+            report << "audio_suspends=" << audio.capture.suspend_count << '\n';
+            report << "audio_recoveries="
+                   << audio.capture.recovery_count << '\n';
+            report << "audio_short_reads="
+                   << audio.capture.short_read_count << '\n';
+            report << "audio_status_errors="
+                   << audio.capture.status_error_count << '\n';
+        }
+        WriteQueue(report, "queue.audio_pcm", audio_queue_stats);
+#if defined(VISIONARM_HAS_AV_MUX)
+        report << "local_av_mux_enabled=" << (av_mux_enabled ? 1 : 0) << '\n';
+        if (av_mux_enabled) {
+            report << "local_av_output=" << options.av_output << '\n';
+            report << "audio_encode_bitrate_bps=" << options.audio_bitrate << '\n';
+            if (audio_encode_stats.has_value()) {
+                const auto& encode = *audio_encode_stats;
+                report << "audio_encode_worker_started=" << (encode.started ? 1 : 0) << '\n';
+                report << "audio_encode_worker_fatal_error=" << (encode.fatal_error ? 1 : 0) << '\n';
+                report << "audio_encode_worker_last_error=" << encode.last_error << '\n';
+                report << "audio_encode_chunks_consumed=" << encode.chunks_consumed << '\n';
+                report << "audio_encode_packets_pushed=" << encode.packets_pushed << '\n';
+                report << "audio_encode_bytes_pushed=" << encode.bytes_pushed << '\n';
+                report << "audio_encode_queue_push_failures=" << encode.queue_push_failures << '\n';
+                report << "audio_encoder_input_frames=" << encode.encoder.input_frames << '\n';
+                report << "audio_encoder_submitted_codec_frames=" << encode.encoder.submitted_codec_frames << '\n';
+                report << "audio_encoder_emitted_packets=" << encode.encoder.emitted_packets << '\n';
+                report << "audio_encoder_emitted_bytes=" << encode.encoder.emitted_bytes << '\n';
+                report << "audio_encoder_padding_packets=" << encode.encoder.encoder_padding_packets << '\n';
+                report << "audio_encoder_failures=" << encode.encoder.encode_failures << '\n';
+                report << "audio_encoder_buffered_input_frames=" << encode.encoder.buffered_input_frames << '\n';
+                report << "audio_encoder_drained=" << (encode.encoder.drained ? 1 : 0) << '\n';
+            }
+            WriteQueue(report, "queue.audio_encoded", audio_encoded_queue_stats);
+            if (audio_sink_stats.has_value()) {
+                const auto& sink = *audio_sink_stats;
+                report << "audio_encoded_sink_started=" << (sink.started ? 1 : 0) << '\n';
+                report << "audio_encoded_sink_fatal_error=" << (sink.fatal_error ? 1 : 0) << '\n';
+                report << "audio_encoded_sink_packets_written=" << sink.packets_written << '\n';
+                report << "audio_encoded_sink_bytes_written=" << sink.bytes_written << '\n';
+                report << "audio_encoded_sink_failures=" << sink.sink_failures << '\n';
+            }
+            report << "local_av_finalize_ok=" << (av_mux_finalize_ok ? 1 : 0) << '\n';
+            if (av_mux_stats.has_value()) {
+                const auto& mux = *av_mux_stats;
+                report << "local_av_header_written=" << (mux.header_written ? 1 : 0) << '\n';
+                report << "local_av_finalized=" << (mux.finalized ? 1 : 0) << '\n';
+                report << "local_av_fatal_error=" << (mux.fatal_error ? 1 : 0) << '\n';
+                report << "local_av_last_error=" << mux.last_error << '\n';
+                report << "local_av_video_fragments_received=" << mux.video_fragments_received << '\n';
+                report << "local_av_video_samples_written=" << mux.video_samples_written << '\n';
+                report << "local_av_video_bytes_written=" << mux.video_bytes_written << '\n';
+                report << "local_av_audio_packets_written=" << mux.audio_packets_written << '\n';
+                report << "local_av_audio_bytes_written=" << mux.audio_bytes_written << '\n';
+                report << "local_av_write_failures=" << mux.write_failures << '\n';
+                report << "local_av_first_video_pts_us=" << mux.first_video_pts_us << '\n';
+                report << "local_av_last_video_pts_us=" << mux.last_video_pts_us << '\n';
+                report << "local_av_first_audio_pts_ns=" << mux.first_audio_pts_ns << '\n';
+                report << "local_av_last_audio_pts_ns=" << mux.last_audio_pts_ns << '\n';
+            }
+        }
+#endif
+        report << "audio_timeline_chunks=" << audio_timeline_stats.chunks << '\n';
+        report << "audio_timeline_frames=" << audio_timeline_stats.frames << '\n';
+        report << "audio_timeline_bytes=" << audio_timeline_stats.bytes << '\n';
+        report << "audio_timeline_reanchors="
+               << audio_timeline_stats.reanchors << '\n';
+        report << "audio_timeline_discontinuities="
+               << audio_timeline_stats.discontinuities << '\n';
+        report << "audio_timeline_pts_regressions="
+               << audio_timeline_stats.pts_regressions << '\n';
+        report << "audio_timeline_continuous_pts_mismatches="
+               << audio_timeline_stats.continuous_pts_mismatches << '\n';
+        report << "audio_timeline_first_pts_ns="
+               << audio_timeline_stats.first_pts_ns << '\n';
+        report << "audio_timeline_last_pts_ns="
+               << audio_timeline_stats.last_pts_ns << '\n';
+        report << "audio_timeline_last_end_pts_ns="
+               << audio_timeline_stats.last_end_pts_ns << '\n';
+        report << "audio_timeline_max_forward_gap_ns="
+               << audio_timeline_stats.maximum_forward_gap_ns << '\n';
+        report << "audio_timeline_max_abs_timing_error_ns="
+               << audio_timeline_stats.maximum_abs_timing_error_ns << '\n';
+#endif
+        report << "media_audio_anchor_valid="
+               << (media_clock_stats.audio_anchor_valid ? 1 : 0) << '\n';
+        report << "media_audio_chunks_stamped="
+               << media_clock_stats.audio_chunks_stamped << '\n';
+        report << "media_audio_reanchors="
+               << media_clock_stats.audio_reanchors << '\n';
+        report << "media_audio_discontinuities="
+               << media_clock_stats.audio_discontinuities << '\n';
+        report << "media_audio_timestamp_failures="
+               << media_clock_stats.audio_timestamp_failures << '\n';
+        report << "media_audio_latest_timing_error_ns="
+               << media_clock_stats.latest_audio_timing_error_ns << '\n';
+        report << "media_audio_max_abs_timing_error_ns="
+               << media_clock_stats.maximum_abs_audio_timing_error_ns << '\n';
+        report << "media_audio_last_pts_ns="
+               << media_clock_stats.last_audio_pts_ns << '\n';
+        report << "media_audio_last_end_pts_ns="
+               << media_clock_stats.last_audio_end_pts_ns << '\n';
         report << "model_input_width=" << kModelWidth << '\n';
         report << "model_input_height=" << kModelHeight << '\n';
         report << "input_slots=" << options.input_slots << '\n';
@@ -838,8 +1243,6 @@ int main(int argc, char** argv) {
         report << "max_result_age_ms=" << options.max_result_age_ms << '\n';
         report << "control_backend="
                << ControlBackendName(options.control_backend) << '\n';
-        report << "v7_control_csv=" << options.v7_control_csv << '\n';
-        report << "v7_status_csv=" << options.v7_status_csv << '\n';
         if (options.control_backend == ControlBackend::UART) {
             report << "uart_device=" << options.uart_device << '\n';
             report << "uart_baud=" << options.uart_baud << '\n';
@@ -997,18 +1400,6 @@ int main(int argc, char** argv) {
                    << link.metrics.parser.oversize_errors << '\n';
         }
 #endif
-        if (v7_trace_stats.has_value()) {
-            const auto& trace = *v7_trace_stats;
-            report << "v7.trace.submissions=" << trace.submissions << '\n';
-            report << "v7.trace.downstream_accepted="
-                   << trace.downstream_accepted << '\n';
-            report << "v7.trace.downstream_rejected="
-                   << trace.downstream_rejected << '\n';
-            report << "v7.trace.enqueued=" << trace.enqueued << '\n';
-            report << "v7.trace.dropped=" << trace.dropped << '\n';
-            report << "v7.trace.written=" << trace.written << '\n';
-            report << "v7.trace.write_errors=" << trace.write_errors << '\n';
-        }
 
         WriteQueue(report, "queue.captured", stats.captured_frame_queue);
         WriteQueue(report, "queue.prepared", stats.prepared_frame_queue);
@@ -1068,6 +1459,80 @@ int main(int argc, char** argv) {
             QueueBounded(stats.video_frame_queue) &&
             QueueBounded(stats.encoded_packet_queue);
 
+        bool audio_ok = true;
+#if defined(VISIONARM_HAS_ALSA_AUDIO)
+        if (options.audio_enabled) {
+            audio_ok =
+                audio_worker_stats.has_value() &&
+                audio_worker_stats->started &&
+                !audio_worker_stats->fatal_error &&
+                audio_worker_stats->timed_chunks > 0U &&
+                audio_worker_stats->timed_frames > 0U &&
+                audio_worker_stats->queue_push_failures == 0U &&
+                audio_worker_stats->capture.xrun_count == 0U &&
+                audio_worker_stats->capture.suspend_count == 0U &&
+                audio_worker_stats->capture.status_error_count == 0U &&
+                QueueBounded(audio_queue_stats) &&
+                audio_queue_stats.replaced_oldest == 0U &&
+                audio_timeline_stats.chunks > 0U &&
+                audio_timeline_stats.pts_regressions == 0U &&
+                audio_timeline_stats.continuous_pts_mismatches == 0U &&
+                media_clock_stats.audio_anchor_valid &&
+                media_clock_stats.audio_chunks_stamped > 0U &&
+                media_clock_stats.audio_timestamp_failures == 0U;
+        }
+#endif
+        report << "audio_path_ok=" << (audio_ok ? 1 : 0) << '\n';
+
+        bool audio_encode_ok = true;
+        bool local_av_mux_ok = true;
+#if defined(VISIONARM_HAS_AV_MUX)
+        if (av_mux_enabled) {
+            audio_encode_ok =
+                audio_encode_stats.has_value() &&
+                audio_encode_stats->started &&
+                !audio_encode_stats->fatal_error &&
+                audio_encode_stats->chunks_consumed > 0U &&
+                audio_encode_stats->packets_pushed > 0U &&
+                audio_encode_stats->queue_push_failures == 0U &&
+                audio_encode_stats->encoder.input_frames ==
+                    audio_timeline_stats.frames &&
+                audio_encode_stats->encoder.emitted_packets ==
+                    audio_encode_stats->packets_pushed &&
+                audio_encode_stats->encoder.encode_failures == 0U &&
+                audio_encode_stats->encoder.buffered_input_frames == 0U &&
+                audio_encode_stats->encoder.drained &&
+                QueueBounded(audio_encoded_queue_stats) &&
+                audio_encoded_queue_stats.replaced_oldest == 0U &&
+                audio_encoded_queue_stats.current_size == 0U &&
+                audio_encoded_queue_stats.pushed ==
+                    audio_encoded_queue_stats.popped &&
+                audio_sink_stats.has_value() &&
+                audio_sink_stats->started &&
+                !audio_sink_stats->fatal_error &&
+                audio_sink_stats->sink_failures == 0U &&
+                audio_sink_stats->packets_written ==
+                    audio_encode_stats->packets_pushed;
+
+            local_av_mux_ok =
+                av_mux_finalize_ok &&
+                av_mux_stats.has_value() &&
+                av_mux_stats->header_written &&
+                av_mux_stats->finalized &&
+                !av_mux_stats->fatal_error &&
+                av_mux_stats->write_failures == 0U &&
+                av_mux_stats->video_samples_written > 0U &&
+                av_mux_stats->video_samples_written ==
+                    stats.video_frames_encoded &&
+                av_mux_stats->audio_packets_written > 0U &&
+                audio_sink_stats.has_value() &&
+                av_mux_stats->audio_packets_written ==
+                    audio_sink_stats->packets_written;
+        }
+#endif
+        report << "audio_encode_path_ok=" << (audio_encode_ok ? 1 : 0) << '\n';
+        report << "local_av_mux_ok=" << (local_av_mux_ok ? 1 : 0) << '\n';
+
         bool control_ok = false;
         if (options.control_backend == ControlBackend::MOCK) {
             control_ok =
@@ -1103,14 +1568,6 @@ int main(int argc, char** argv) {
         }
 #endif
 
-        const bool v7_trace_ok =
-            !v7_trace_stats.has_value() ||
-            (v7_trace_stats->submissions > 0U &&
-             v7_trace_stats->downstream_rejected == 0U &&
-             v7_trace_stats->dropped == 0U &&
-             v7_trace_stats->write_errors == 0U &&
-             v7_trace_stats->written == v7_trace_stats->enqueued);
-
         const bool passed =
             stats.captured_frames > 0U &&
             stats.video_frames_encoded > 0U &&
@@ -1143,7 +1600,10 @@ int main(int argc, char** argv) {
             state_stats.perception_sink_failures == 0U &&
             state_stats.invalid_timestamp_packets == 0U &&
             control_ok &&
-            queues_ok && timing_ok && rss_ok && v7_trace_ok;
+            audio_ok &&
+            audio_encode_ok &&
+            local_av_mux_ok &&
+            queues_ok && timing_ok && rss_ok;
 
         report << "vision_pipeline_r7_r8_probe="
                << (passed ? "PASS" : "FAIL") << '\n';

@@ -9,7 +9,13 @@ namespace visionarm {
 
 struct EncodedPacket {
     FrameIdentity identity;
+
+    // V8.3 media PTS in microseconds from the common monotonic media epoch.
+    // The original absolute capture timestamp remains in identity.
     int64_t pts_us = 0;
+    int64_t dts_us = 0;
+    int64_t duration_us = 0;
+    bool keyframe = false;
     bool codec_config = false;
     bool end_of_frame = true;
     bool end_of_stream = false;

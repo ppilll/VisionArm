@@ -33,6 +33,53 @@ namespace {
     return static_cast<std::size_t>(std::max(raw, one_megabyte));
 }
 
+[[nodiscard]] int64_t NominalFrameDurationUs(
+    const MppH265EncoderConfig& config) noexcept {
+    const int64_t numerator =
+        static_cast<int64_t>(config.fps_denominator) * 1'000'000LL;
+    return (numerator + config.fps_numerator / 2) /
+           static_cast<int64_t>(config.fps_numerator);
+}
+
+[[nodiscard]] bool IsHevcRandomAccessPicture(
+    const uint8_t* data,
+    std::size_t size) noexcept {
+    if (data == nullptr || size < 6U) {
+        return false;
+    }
+
+    std::size_t offset = 0U;
+    while (offset + 4U < size) {
+        std::size_t start = size;
+        std::size_t prefix = 0U;
+        for (std::size_t i = offset; i + 3U < size; ++i) {
+            if (data[i] == 0U && data[i + 1U] == 0U && data[i + 2U] == 1U) {
+                start = i;
+                prefix = 3U;
+                break;
+            }
+            if (i + 4U < size && data[i] == 0U && data[i + 1U] == 0U &&
+                data[i + 2U] == 0U && data[i + 3U] == 1U) {
+                start = i;
+                prefix = 4U;
+                break;
+            }
+        }
+        if (start == size || start + prefix >= size) {
+            break;
+        }
+
+        const uint8_t nal_header = data[start + prefix];
+        const uint8_t nal_type = static_cast<uint8_t>((nal_header >> 1U) & 0x3FU);
+        // HEVC IRAP VCL NAL unit types BLA/IDR/CRA are 16..21.
+        if (nal_type >= 16U && nal_type <= 21U) {
+            return true;
+        }
+        offset = start + prefix + 2U;
+    }
+    return false;
+}
+
 }  // namespace
 
 MppH265Encoder::~MppH265Encoder() {
@@ -50,18 +97,31 @@ void MppH265Encoder::Initialize(const MppH265EncoderConfig& config) {
         config.max_source_buffers == 0U) {
         throw std::invalid_argument("invalid MPP H.265 encoder config");
     }
+    // The frozen V8.1 sensor capability matrix contains integer frame rates
+    // only (30/60/90 fps), so the media-side configured FPS denominator is 1.
+    // Do not probe vendor-specific MppEncCfg key spellings at runtime: some
+    // vendor librockchip_mpp builds do not safely tolerate unknown keys.
+    // MPP_ENC_GET_CFG initializes both FPS denominators to the runtime default
+    // (1 on supported Rockchip MPP releases), therefore only the numerator
+    // needs to be overridden for this product.
+    if (config.fps_denominator != 1) {
+        throw std::invalid_argument(
+            "MPP H.265 encoder supports only integer FPS on this BSP");
+    }
 
     config_ = config;
     if (config_.packet_buffer_bytes == 0U) {
         config_.packet_buffer_bytes = DefaultPacketCapacity(config_);
     }
 
+    std::cerr << "MPP init stage=create" << '\n';
     if (!MppOk(mpp_create(&context_, &mpi_), "mpp_create") ||
         context_ == nullptr || mpi_ == nullptr) {
         Shutdown();
         throw std::runtime_error("failed to create MPP encoder context");
     }
 
+    std::cerr << "MPP init stage=context_created" << '\n';
     MppPollType timeout = MPP_POLL_BLOCK;
     if (!MppOk(
             mpi_->control(context_, MPP_SET_OUTPUT_TIMEOUT, &timeout),
@@ -73,11 +133,13 @@ void MppH265Encoder::Initialize(const MppH265EncoderConfig& config) {
         throw std::runtime_error("failed to initialize MPP HEVC encoder");
     }
 
+    std::cerr << "MPP init stage=configure" << '\n';
     if (!ConfigureEncoder()) {
         Shutdown();
         throw std::runtime_error("failed to configure MPP HEVC encoder");
     }
 
+    std::cerr << "MPP init stage=configured" << '\n';
     if (!MppOk(
             mpp_buffer_group_get_internal(
                 &packet_group_, MPP_BUFFER_TYPE_DRM),
@@ -92,11 +154,13 @@ void MppH265Encoder::Initialize(const MppH265EncoderConfig& config) {
     }
 
     imported_sources_.resize(config_.max_source_buffers);
+    std::cerr << "MPP init stage=codec_header" << '\n';
     if (!BuildCodecHeader()) {
         Shutdown();
         throw std::runtime_error("failed to obtain H.265 VPS/SPS/PPS");
     }
     initialized_ = true;
+    std::cerr << "MPP init stage=ready" << '\n';
 }
 
 bool MppH265Encoder::ConfigureEncoder() noexcept {
@@ -126,10 +190,10 @@ bool MppH265Encoder::ConfigureEncoder() noexcept {
     set("rc:mode", MPP_ENC_RC_MODE_CBR);
     set("rc:fps_in_flex", 0);
     set("rc:fps_in_num", config_.fps_numerator);
-    set("rc:fps_in_denom", config_.fps_denominator);
+    // Keep the denominator returned by MPP_ENC_GET_CFG.  The product only
+    // uses integer FPS and the Rockchip MPP default denominator is 1.
     set("rc:fps_out_flex", 0);
     set("rc:fps_out_num", config_.fps_numerator);
-    set("rc:fps_out_denom", config_.fps_denominator);
     set("rc:gop", config_.gop_length);
     set("rc:bps_target", config_.bitrate_bps);
     set("rc:bps_max", config_.bitrate_bps * 17 / 16);
@@ -261,9 +325,19 @@ bool MppH265Encoder::EncodeOne(
     mpp_frame_set_fmt(mpp_frame, MPP_FMT_YUV420SP);
     mpp_frame_set_buffer(mpp_frame, source);
     mpp_frame_set_buf_size(mpp_frame, frame.planes[0].allocation_length);
+
+    int64_t video_pts_ns = frame.identity.capture_timestamp_ns;
+    if (config_.media_epoch_monotonic_ns > 0) {
+        if (video_pts_ns < config_.media_epoch_monotonic_ns) {
+            mpp_frame_deinit(&mpp_frame);
+            mpp_packet_deinit(&packet);
+            return false;
+        }
+        video_pts_ns -= config_.media_epoch_monotonic_ns;
+    }
     mpp_frame_set_pts(
         mpp_frame,
-        static_cast<RK_S64>(frame.identity.capture_timestamp_ns / 1000));
+        static_cast<RK_S64>(video_pts_ns / 1000));
 
     MppMeta meta = mpp_frame_get_meta(mpp_frame);
     if (meta == nullptr ||
@@ -308,7 +382,14 @@ bool MppH265Encoder::EncodeOne(
 
         EncodedPacket encoded;
         encoded.identity = frame.identity;
-        encoded.pts_us = frame.identity.capture_timestamp_ns / 1000;
+        const RK_S64 packet_pts = mpp_packet_get_pts(packet);
+        const RK_S64 packet_dts = mpp_packet_get_dts(packet);
+        encoded.pts_us = packet_pts >= 0 ?
+            static_cast<int64_t>(packet_pts) : video_pts_ns / 1000;
+        encoded.dts_us = packet_dts >= 0 ?
+            static_cast<int64_t>(packet_dts) : encoded.pts_us;
+        encoded.duration_us = NominalFrameDurationUs(config_);
+        encoded.keyframe = IsHevcRandomAccessPicture(data, size);
         encoded.end_of_frame = end_of_image;
         encoded.end_of_stream = mpp_packet_get_eos(packet) != 0U;
         encoded.bytes.assign(data, data + size);
