@@ -46,6 +46,10 @@ option(
     "Build the FFmpeg libavformat HEVC+AAC MP4 local recorder"
     OFF)
 option(
+    VISIONARM_ENABLE_FFMPEG_MPEGTS_UDP
+    "Build the FFmpeg libavformat HEVC+AAC MPEG-TS/UDP network sink"
+    OFF)
+option(
     VISIONARM_ENABLE_UART_CONTROL
     "Build the integrated R6 UART control path"
     ON)
@@ -54,9 +58,10 @@ option(
     "Build real RK3588-to-MCU UART motor-control board tests"
     OFF)
 
-if(VISIONARM_ENABLE_FFMPEG_MP4_MUX AND NOT VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER)
+if((VISIONARM_ENABLE_FFMPEG_MP4_MUX OR VISIONARM_ENABLE_FFMPEG_MPEGTS_UDP) AND
+   NOT VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER)
     message(FATAL_ERROR
-        "VISIONARM_ENABLE_FFMPEG_MP4_MUX requires VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER=ON")
+        "FFmpeg A/V mux outputs require VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER=ON")
 endif()
 
 if(VISIONARM_BUILD_UART_BOARD_TESTS AND NOT VISIONARM_ENABLE_UART_CONTROL)
@@ -177,7 +182,7 @@ if(VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER)
             -Wshadow)
 endif()
 
-if(VISIONARM_ENABLE_FFMPEG_MP4_MUX)
+if(VISIONARM_ENABLE_FFMPEG_MP4_MUX OR VISIONARM_ENABLE_FFMPEG_MPEGTS_UDP)
     set(
         FFMPEG_AVFORMAT_LIBRARY
         ""
@@ -190,14 +195,24 @@ if(VISIONARM_ENABLE_FFMPEG_MP4_MUX)
     endif()
     if(NOT FFMPEG_AVFORMAT_LIBRARY)
         message(FATAL_ERROR
-            "VISIONARM_ENABLE_FFMPEG_MP4_MUX=ON requires libavformat. "
+            "FFmpeg A/V mux outputs require libavformat. "
             "Set FFMPEG_AVFORMAT_LIBRARY to the Buildroot staging libavformat.so")
+    endif()
+
+    set(VISIONARM_MEDIA_MUX_SOURCES)
+    if(VISIONARM_ENABLE_FFMPEG_MP4_MUX)
+        list(APPEND VISIONARM_MEDIA_MUX_SOURCES
+            src/media/ffmpeg_mp4_muxer.cpp)
+    endif()
+    if(VISIONARM_ENABLE_FFMPEG_MPEGTS_UDP)
+        list(APPEND VISIONARM_MEDIA_MUX_SOURCES
+            src/media/ffmpeg_mpegts_udp_muxer.cpp)
     endif()
 
     add_library(
         visionarm_media_mux
         STATIC
-            src/media/ffmpeg_mp4_muxer.cpp)
+            ${VISIONARM_MEDIA_MUX_SOURCES})
     add_library(visionarm::media_mux ALIAS visionarm_media_mux)
     target_include_directories(
         visionarm_media_mux
@@ -660,7 +675,8 @@ if(VISIONARM_BUILD_RUNTIME AND VISIONARM_BUILD_ACCELERATION_TOOLS)
         endif()
         if(VISIONARM_ENABLE_ALSA_AUDIO AND
            VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER AND
-           VISIONARM_ENABLE_FFMPEG_MP4_MUX)
+           (VISIONARM_ENABLE_FFMPEG_MP4_MUX OR
+            VISIONARM_ENABLE_FFMPEG_MPEGTS_UDP))
             target_link_libraries(
                 vision_pipeline_r7_r8_probe
                 PRIVATE
@@ -670,6 +686,18 @@ if(VISIONARM_BUILD_RUNTIME AND VISIONARM_BUILD_ACCELERATION_TOOLS)
                 vision_pipeline_r7_r8_probe
                 PRIVATE
                     VISIONARM_HAS_AV_MUX=1)
+            if(VISIONARM_ENABLE_FFMPEG_MP4_MUX)
+                target_compile_definitions(
+                    vision_pipeline_r7_r8_probe
+                    PRIVATE
+                        VISIONARM_HAS_MP4_MUX=1)
+            endif()
+            if(VISIONARM_ENABLE_FFMPEG_MPEGTS_UDP)
+                target_compile_definitions(
+                    vision_pipeline_r7_r8_probe
+                    PRIVATE
+                        VISIONARM_HAS_MPEGTS_UDP=1)
+            endif()
         endif()
         target_compile_options(
             vision_pipeline_r7_r8_probe
