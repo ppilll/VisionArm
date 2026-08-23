@@ -206,7 +206,8 @@ if(VISIONARM_ENABLE_FFMPEG_MP4_MUX OR VISIONARM_ENABLE_FFMPEG_MPEGTS_UDP)
     endif()
     if(VISIONARM_ENABLE_FFMPEG_MPEGTS_UDP)
         list(APPEND VISIONARM_MEDIA_MUX_SOURCES
-            src/media/ffmpeg_mpegts_udp_muxer.cpp)
+            src/media/ffmpeg_mpegts_udp_muxer.cpp
+            src/media/network_media_sink.cpp)
     endif()
 
     add_library(
@@ -225,7 +226,8 @@ if(VISIONARM_ENABLE_FFMPEG_MP4_MUX OR VISIONARM_ENABLE_FFMPEG_MPEGTS_UDP)
         PRIVATE
             ${FFMPEG_AVFORMAT_LIBRARY}
             ${FFMPEG_AVCODEC_LIBRARY}
-            ${FFMPEG_AVUTIL_LIBRARY})
+            ${FFMPEG_AVUTIL_LIBRARY}
+            Threads::Threads)
     target_compile_options(
         visionarm_media_mux
         PRIVATE
