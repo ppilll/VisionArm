@@ -7,15 +7,15 @@
 #include "audio/audio_capture_worker.h"
 #include "pipeline/bounded_queue.h"
 #endif
-#if defined(VISIONARM_HAS_AV_MUX)
+#if defined(VISIONARM_HAS_AUDIO_ENCODE)
 #include "audio/audio_encode_worker.h"
 #include "audio/encoded_audio_sink_worker.h"
 #endif
-#if defined(VISIONARM_HAS_MP4_MUX)
+#if defined(VISIONARM_HAS_AV_MUX)
 #include "media/ffmpeg_mp4_muxer.h"
 #endif
-#if defined(VISIONARM_HAS_MPEGTS_UDP)
-#include "media/network_media_sink.h"
+#if defined(VISIONARM_HAS_NETWORK_MUX)
+#include "media/ffmpeg_mpegts_udp_sink.h"
 #endif
 #include "control/control_sink.h"
 #if defined(VISIONARM_HAS_UART_CONTROL)
@@ -110,10 +110,9 @@ struct Options {
     int audio_encoded_queue = 32;
     int audio_bitrate = 128'000;
     std::string av_output;
-    std::string net_udp;
-    int network_video_queue = 8;
-    int network_audio_queue = 64;
-    int network_reconnect_ms = 500;
+    std::string network_url;
+    int network_queue = 256;
+    int network_io_timeout_ms = 1'000;
     int acquire_hits = 2;
     int lost_misses = 3;
     int max_result_age_ms = 100;
@@ -139,9 +138,9 @@ struct Options {
         << "  [--audio-channels 2] [--audio-period-frames 1024] \\\n"
         << "  [--audio-buffer-frames 4096] [--audio-queue 16] [--audio-disable] \\\n"
         << "  [--av-output recording.mp4] [--audio-bitrate 128000] \\\n"
-        << "  [--net-udp udp://PC_IP:5600?pkt_size=1316&buffer_size=1048576&connect=1] \\\n"
-        << "  [--network-video-queue 8] [--network-audio-queue 64] \\\n"
-        << "  [--network-reconnect-ms 500] [--audio-encoded-queue 32] \\\n"
+        << "  [--audio-encoded-queue 32] \\\n"
+        << "  [--network-url 'udp://PC:5000?pkt_size=1316'] \\\n"
+        << "  [--network-queue 256] [--network-io-timeout-ms 1000] \\\n"
         << "  [--topology fused|split] [--input-slots N] [--output-slots N] \\\n"
         << "  [--acquire-hits N] [--lost-misses N] \\\n"
         << "  [--max-result-age-ms N] [--latency-samples N] \\\n"
@@ -269,10 +268,9 @@ Options ParseOptions(int argc, char** argv) {
         else if (key == "--audio-encoded-queue") options.audio_encoded_queue = ParsePositiveInt(next(), "encoded audio queue");
         else if (key == "--audio-bitrate") options.audio_bitrate = ParsePositiveInt(next(), "audio bitrate");
         else if (key == "--av-output") options.av_output = next();
-        else if (key == "--net-udp") options.net_udp = next();
-        else if (key == "--network-video-queue") options.network_video_queue = ParsePositiveInt(next(), "network video queue");
-        else if (key == "--network-audio-queue") options.network_audio_queue = ParsePositiveInt(next(), "network audio queue");
-        else if (key == "--network-reconnect-ms") options.network_reconnect_ms = ParsePositiveInt(next(), "network reconnect ms");
+        else if (key == "--network-url") options.network_url = next();
+        else if (key == "--network-queue") options.network_queue = ParsePositiveInt(next(), "network queue");
+        else if (key == "--network-io-timeout-ms") options.network_io_timeout_ms = ParsePositiveInt(next(), "network I/O timeout");
         else if (key == "--audio-disable") options.audio_enabled = false;
         else if (key == "--input-slots") options.input_slots = ParsePositiveInt(next(), "input slots");
         else if (key == "--output-slots") options.output_slots = ParsePositiveInt(next(), "output slots");
@@ -354,28 +352,29 @@ Options ParseOptions(int argc, char** argv) {
             "this binary was built without VISIONARM_ENABLE_ALSA_AUDIO");
     }
 #endif
-    if ((!options.av_output.empty() || !options.net_udp.empty()) &&
-        !options.audio_enabled) {
+    if (!options.av_output.empty() && !options.audio_enabled) {
         throw std::invalid_argument(
-            "A/V mux outputs require the frozen V8.3 audio path to be enabled");
+            "--av-output requires the frozen V8.3 audio path to be enabled");
     }
-    if (!options.net_udp.empty() && options.net_udp.rfind("udp://", 0) != 0) {
-        throw std::invalid_argument("--net-udp must use an udp:// URL");
-    }
-    if (!options.net_udp.empty() && options.net_udp.find("connect=1") == std::string::npos) {
+    if (!options.network_url.empty() && !options.audio_enabled) {
         throw std::invalid_argument(
-            "V8.4 reconnect handling requires --net-udp URL option connect=1");
+            "--network-url requires the frozen V8.3 audio path to be enabled");
     }
-#if !defined(VISIONARM_HAS_MP4_MUX)
+    if (!options.network_url.empty() &&
+        options.network_url.rfind("udp://", 0U) != 0U) {
+        throw std::invalid_argument(
+            "V8.4 P0 network URL must start with udp://");
+    }
+#if !defined(VISIONARM_HAS_AV_MUX)
     if (!options.av_output.empty()) {
         throw std::invalid_argument(
             "this binary was built without VISIONARM_ENABLE_FFMPEG_MP4_MUX");
     }
 #endif
-#if !defined(VISIONARM_HAS_MPEGTS_UDP)
-    if (!options.net_udp.empty()) {
+#if !defined(VISIONARM_HAS_NETWORK_MUX)
+    if (!options.network_url.empty()) {
         throw std::invalid_argument(
-            "this binary was built without VISIONARM_ENABLE_FFMPEG_MPEGTS_UDP");
+            "this binary was built without VISIONARM_ENABLE_FFMPEG_MPEGTS_NETWORK");
     }
 #endif
 #if !defined(VISIONARM_HAS_UART_CONTROL)
@@ -640,32 +639,31 @@ bool QueueBounded(const visionarm::QueueStatsSnapshot& value) noexcept {
         value.current_size <= value.capacity;
 }
 
-#if defined(VISIONARM_HAS_AV_MUX)
+#if defined(VISIONARM_HAS_AV_MUX) || defined(VISIONARM_HAS_NETWORK_MUX)
 class FanoutEncodedVideoSink final : public visionarm::IEncodedPacketSink {
 public:
     explicit FanoutEncodedVideoSink(
         std::vector<visionarm::IEncodedPacketSink*> sinks)
         : sinks_(std::move(sinks)) {
-        if (sinks_.empty() ||
-            std::any_of(sinks_.begin(), sinks_.end(), [](const auto* sink) {
-                return sink == nullptr;
-            })) {
+        if (sinks_.size() < 2U ||
+            std::any_of(sinks_.begin(), sinks_.end(),
+                        [](const auto* sink) { return sink == nullptr; })) {
             throw std::invalid_argument(
-                "FanoutEncodedVideoSink requires non-null sinks");
+                "FanoutEncodedVideoSink requires at least two valid sinks");
         }
     }
 
     [[nodiscard]] bool Write(
         const visionarm::EncodedPacket& packet) noexcept override {
         bool ok = true;
-        for (auto* sink : sinks_) {
+        for (visionarm::IEncodedPacketSink* sink : sinks_) {
             ok = sink->Write(packet) && ok;
         }
         return ok;
     }
 
     void Flush() noexcept override {
-        for (auto* sink : sinks_) {
+        for (visionarm::IEncodedPacketSink* sink : sinks_) {
             sink->Flush();
         }
     }
@@ -680,26 +678,25 @@ public:
     explicit FanoutEncodedAudioSink(
         std::vector<visionarm::IEncodedAudioPacketSink*> sinks)
         : sinks_(std::move(sinks)) {
-        if (sinks_.empty() ||
-            std::any_of(sinks_.begin(), sinks_.end(), [](const auto* sink) {
-                return sink == nullptr;
-            })) {
+        if (sinks_.size() < 2U ||
+            std::any_of(sinks_.begin(), sinks_.end(),
+                        [](const auto* sink) { return sink == nullptr; })) {
             throw std::invalid_argument(
-                "FanoutEncodedAudioSink requires non-null sinks");
+                "FanoutEncodedAudioSink requires at least two valid sinks");
         }
     }
 
     [[nodiscard]] bool WriteAudio(
         const visionarm::EncodedAudioPacket& packet) noexcept override {
         bool ok = true;
-        for (auto* sink : sinks_) {
+        for (visionarm::IEncodedAudioPacketSink* sink : sinks_) {
             ok = sink->WriteAudio(packet) && ok;
         }
         return ok;
     }
 
     void FlushAudio() noexcept override {
-        for (auto* sink : sinks_) {
+        for (visionarm::IEncodedAudioPacketSink* sink : sinks_) {
             sink->FlushAudio();
         }
     }
@@ -908,26 +905,34 @@ int main(int argc, char** argv) {
         std::unique_ptr<visionarm::AudioCaptureWorker> audio_worker;
 #endif
 
+#if defined(VISIONARM_HAS_AUDIO_ENCODE)
 #if defined(VISIONARM_HAS_AV_MUX)
-        const bool local_av_mux_enabled = !options.av_output.empty();
-        const bool network_av_mux_enabled = !options.net_udp.empty();
-        const bool encoded_av_mux_enabled =
-            local_av_mux_enabled || network_av_mux_enabled;
+        const bool av_mux_enabled = !options.av_output.empty();
+#else
+        const bool av_mux_enabled = false;
+#endif
+#if defined(VISIONARM_HAS_NETWORK_MUX)
+        const bool network_mux_enabled = !options.network_url.empty();
+#else
+        const bool network_mux_enabled = false;
+#endif
+        const bool encoded_audio_enabled =
+            av_mux_enabled || network_mux_enabled;
         std::unique_ptr<visionarm::BoundedQueue<visionarm::EncodedAudioPacket>>
             audio_encoded_queue;
-#if defined(VISIONARM_HAS_MP4_MUX)
-        std::unique_ptr<visionarm::FfmpegMp4Muxer> av_muxer;
-#endif
-#if defined(VISIONARM_HAS_MPEGTS_UDP)
-        std::unique_ptr<visionarm::NetworkMediaSink> network_media_sink;
-#endif
         std::unique_ptr<visionarm::AudioEncodeWorker> audio_encode_worker;
         std::unique_ptr<visionarm::EncodedAudioSinkWorker> audio_sink_worker;
-        std::unique_ptr<FanoutEncodedVideoSink> video_fanout_sink;
-        std::unique_ptr<FanoutEncodedAudioSink> audio_fanout_sink;
+        std::unique_ptr<FanoutEncodedAudioSink> fanout_audio_sink;
+        std::unique_ptr<FanoutEncodedVideoSink> fanout_video_sink;
+#if defined(VISIONARM_HAS_AV_MUX)
+        std::unique_ptr<visionarm::FfmpegMp4Muxer> av_muxer;
+#endif
+#if defined(VISIONARM_HAS_NETWORK_MUX)
+        std::unique_ptr<visionarm::FfmpegMpegTsUdpSink> network_muxer;
+#endif
 
-        if (encoded_av_mux_enabled) {
-            std::cerr << "startup stage=encoded_av_mux_path_begin" << '\n';
+        if (encoded_audio_enabled) {
+            std::cerr << "startup stage=encoded_audio_path_begin" << '\n';
             audio_encoded_queue = std::make_unique<
                 visionarm::BoundedQueue<visionarm::EncodedAudioPacket>>(
                     static_cast<std::size_t>(options.audio_encoded_queue));
@@ -957,21 +962,13 @@ int main(int argc, char** argv) {
             }
 
             std::cerr << "startup stage=audio_encode_worker_ready" << '\n';
-            std::cerr << "startup stage=hevc_codec_config_copy" << '\n';
             const std::vector<std::uint8_t> hevc_codec_config =
                 ConcatenateCodecConfig(encoder.CodecConfigPackets());
-            const visionarm::AudioEncoderStreamInfo audio_stream_info =
-                audio_encode_worker->stream_info();
-            std::cerr << "startup stage=mux_config_ready hevc_extradata_bytes="
-                      << hevc_codec_config.size()
-                      << " aac_extradata_bytes="
-                      << audio_stream_info.codec_config.size() << '\n';
 
-            std::vector<visionarm::IEncodedPacketSink*> av_video_sinks;
-            std::vector<visionarm::IEncodedAudioPacketSink*> av_audio_sinks;
-
-#if defined(VISIONARM_HAS_MP4_MUX)
-            if (local_av_mux_enabled) {
+            std::vector<visionarm::IEncodedAudioPacketSink*> audio_sinks;
+            std::vector<visionarm::IEncodedPacketSink*> video_sinks{&file_sink};
+#if defined(VISIONARM_HAS_AV_MUX)
+            if (av_mux_enabled) {
                 visionarm::FfmpegMp4MuxerConfig mux_config;
                 mux_config.path = options.av_output;
                 mux_config.video_width =
@@ -984,88 +981,82 @@ int main(int argc, char** argv) {
                 mux_config.video_fps_denominator =
                     static_cast<std::int32_t>(configured_sensor_fps.denominator);
                 mux_config.hevc_annexb_codec_config = hevc_codec_config;
-                mux_config.audio = audio_stream_info;
+                mux_config.audio = audio_encode_worker->stream_info();
+                std::cerr
+                    << "startup stage=mux_config_ready hevc_extradata_bytes="
+                    << mux_config.hevc_annexb_codec_config.size()
+                    << " aac_extradata_bytes="
+                    << mux_config.audio.codec_config.size() << '\n';
 
                 av_muxer = std::make_unique<visionarm::FfmpegMp4Muxer>();
                 std::cerr << "startup stage=mp4_mux_initialize" << '\n';
                 av_muxer->Initialize(mux_config);
                 std::cerr << "startup stage=mp4_mux_ready" << '\n';
-                av_video_sinks.push_back(av_muxer.get());
-                av_audio_sinks.push_back(av_muxer.get());
-                std::cout << "local A/V mux enabled output=" << options.av_output
-                          << '\n';
+                audio_sinks.push_back(av_muxer.get());
+                video_sinks.push_back(av_muxer.get());
+                std::cout
+                    << "local A/V mux enabled output=" << options.av_output
+                    << " audio_bitrate=" << options.audio_bitrate
+                    << " encoded_audio_queue=" << options.audio_encoded_queue
+                    << '\n';
             }
 #endif
 
-#if defined(VISIONARM_HAS_MPEGTS_UDP)
-            if (network_av_mux_enabled) {
-                visionarm::NetworkMediaSinkConfig network_config;
-                network_config.mux.url = options.net_udp;
-                network_config.mux.video_width =
+#if defined(VISIONARM_HAS_NETWORK_MUX)
+            if (network_mux_enabled) {
+                visionarm::FfmpegMpegTsUdpSinkConfig network_config;
+                network_config.url = options.network_url;
+                network_config.video_width =
                     static_cast<std::int32_t>(camera_format.width);
-                network_config.mux.video_height =
+                network_config.video_height =
                     static_cast<std::int32_t>(camera_format.height);
-                network_config.mux.video_bit_rate_bps = options.bitrate;
-                network_config.mux.video_fps_numerator =
+                network_config.video_bit_rate_bps = options.bitrate;
+                network_config.video_fps_numerator =
                     static_cast<std::int32_t>(configured_sensor_fps.numerator);
-                network_config.mux.video_fps_denominator =
+                network_config.video_fps_denominator =
                     static_cast<std::int32_t>(configured_sensor_fps.denominator);
-                network_config.mux.hevc_annexb_codec_config = hevc_codec_config;
-                network_config.mux.audio = audio_stream_info;
-                network_config.video_queue_capacity =
-                    static_cast<std::size_t>(options.network_video_queue);
-                network_config.audio_queue_capacity =
-                    static_cast<std::size_t>(options.network_audio_queue);
-                network_config.reconnect_interval_ms =
-                    static_cast<std::uint32_t>(options.network_reconnect_ms);
+                network_config.hevc_annexb_codec_config = hevc_codec_config;
+                network_config.audio = audio_encode_worker->stream_info();
+                network_config.packet_queue_capacity =
+                    static_cast<std::size_t>(options.network_queue);
+                network_config.io_timeout_us =
+                    static_cast<std::int64_t>(options.network_io_timeout_ms) *
+                    1'000LL;
 
-                network_media_sink =
-                    std::make_unique<visionarm::NetworkMediaSink>(network_config);
-                std::string network_start_error;
-                std::cerr << "startup stage=network_media_sink_start" << '\n';
-                if (!network_media_sink->Start(&network_start_error)) {
-                    throw std::runtime_error(
-                        "NetworkMediaSink Start failed: " + network_start_error);
-                }
-                std::cerr << "startup stage=network_media_sink_ready" << '\n';
-                av_video_sinks.push_back(network_media_sink.get());
-                av_audio_sinks.push_back(network_media_sink.get());
-                std::cout << "network A/V sink enabled url=" << options.net_udp
-                          << " video_queue=" << options.network_video_queue
-                          << " audio_queue=" << options.network_audio_queue
-                          << " reconnect_ms=" << options.network_reconnect_ms
+                network_muxer =
+                    std::make_unique<visionarm::FfmpegMpegTsUdpSink>();
+                std::cerr << "startup stage=mpegts_udp_initialize" << '\n';
+                network_muxer->Initialize(network_config);
+                std::cerr << "startup stage=mpegts_udp_ready" << '\n';
+                audio_sinks.push_back(network_muxer.get());
+                video_sinks.push_back(network_muxer.get());
+                std::cout << "network A/V enabled url=" << options.network_url
+                          << " packet_queue=" << options.network_queue
+                          << " io_timeout_ms=" << options.network_io_timeout_ms
                           << '\n';
             }
 #endif
 
-            if (av_video_sinks.empty() || av_audio_sinks.empty()) {
-                throw std::runtime_error("requested A/V sinks are unavailable");
+            visionarm::IEncodedAudioPacketSink* selected_audio_sink = nullptr;
+            if (audio_sinks.size() == 1U) {
+                selected_audio_sink = audio_sinks.front();
+            } else {
+                fanout_audio_sink =
+                    std::make_unique<FanoutEncodedAudioSink>(audio_sinks);
+                selected_audio_sink = fanout_audio_sink.get();
             }
-
-            audio_fanout_sink = std::make_unique<FanoutEncodedAudioSink>(
-                std::move(av_audio_sinks));
             audio_sink_worker =
                 std::make_unique<visionarm::EncodedAudioSinkWorker>(
-                    audio_encoded_queue.get(), audio_fanout_sink.get());
+                    audio_encoded_queue.get(), selected_audio_sink);
             std::string audio_sink_error;
             if (!audio_sink_worker->Start(&audio_sink_error)) {
                 throw std::runtime_error(
                     "encoded audio sink Start failed: " + audio_sink_error);
             }
 
-            std::vector<visionarm::IEncodedPacketSink*> video_sinks;
-            video_sinks.push_back(&file_sink);
-            video_sinks.insert(
-                video_sinks.end(), av_video_sinks.begin(), av_video_sinks.end());
-            video_fanout_sink = std::make_unique<FanoutEncodedVideoSink>(
-                std::move(video_sinks));
-            selected_video_sink = video_fanout_sink.get();
-            std::cout << "encoded A/V output audio_bitrate="
-                      << options.audio_bitrate
-                      << " encoded_audio_queue=" << options.audio_encoded_queue
-                      << " local=" << (local_av_mux_enabled ? 1 : 0)
-                      << " network=" << (network_av_mux_enabled ? 1 : 0)
-                      << '\n';
+            fanout_video_sink =
+                std::make_unique<FanoutEncodedVideoSink>(video_sinks);
+            selected_video_sink = fanout_video_sink.get();
         }
 #endif
 
@@ -1145,28 +1136,27 @@ int main(int argc, char** argv) {
                pipeline.running()) {
 #if defined(VISIONARM_HAS_ALSA_AUDIO)
             if (options.audio_enabled) {
-#if defined(VISIONARM_HAS_AV_MUX)
-                if (!encoded_av_mux_enabled) {
+#if defined(VISIONARM_HAS_AUDIO_ENCODE)
+                if (!encoded_audio_enabled) {
                     DrainAudioQueue(&audio_pcm_queue, &audio_timeline_stats);
                 }
-                if (encoded_av_mux_enabled) {
-                    bool mux_fatal = false;
-#if defined(VISIONARM_HAS_MP4_MUX)
-                    if (local_av_mux_enabled && av_muxer != nullptr) {
-                        mux_fatal = mux_fatal || av_muxer->Snapshot().fatal_error;
-                    }
+                bool encoded_path_fatal = false;
+                if (encoded_audio_enabled) {
+                    encoded_path_fatal =
+                        audio_encode_worker->Snapshot().fatal_error ||
+                        audio_sink_worker->Snapshot().fatal_error;
+#if defined(VISIONARM_HAS_AV_MUX)
+                    encoded_path_fatal = encoded_path_fatal ||
+                        (av_mux_enabled && av_muxer->Snapshot().fatal_error);
 #endif
-#if defined(VISIONARM_HAS_MPEGTS_UDP)
-                    if (network_av_mux_enabled &&
-                        network_media_sink != nullptr) {
-                        mux_fatal = mux_fatal ||
-                            network_media_sink->Snapshot().fatal_error;
-                    }
+#if defined(VISIONARM_HAS_NETWORK_MUX)
+                    encoded_path_fatal = encoded_path_fatal ||
+                        (network_mux_enabled &&
+                         network_muxer->Snapshot().fatal_error);
 #endif
-                    if (audio_encode_worker->Snapshot().fatal_error ||
-                        audio_sink_worker->Snapshot().fatal_error || mux_fatal) {
-                        break;
-                    }
+                }
+                if (encoded_path_fatal) {
+                    break;
                 }
 #else
                 DrainAudioQueue(&audio_pcm_queue, &audio_timeline_stats);
@@ -1185,40 +1175,40 @@ int main(int argc, char** argv) {
         pipeline.Stop();
 #if defined(VISIONARM_HAS_ALSA_AUDIO)
         std::optional<visionarm::AudioCaptureWorkerSnapshot> audio_worker_stats;
-#if defined(VISIONARM_HAS_AV_MUX)
+#if defined(VISIONARM_HAS_AUDIO_ENCODE)
         std::optional<visionarm::AudioEncodeWorkerSnapshot> audio_encode_stats;
         std::optional<visionarm::EncodedAudioSinkWorkerSnapshot> audio_sink_stats;
-#if defined(VISIONARM_HAS_MP4_MUX)
+        visionarm::QueueStatsSnapshot audio_encoded_queue_stats;
+#if defined(VISIONARM_HAS_AV_MUX)
         std::optional<visionarm::FfmpegMp4MuxerSnapshot> av_mux_stats;
         bool av_mux_finalize_ok = true;
 #endif
-#if defined(VISIONARM_HAS_MPEGTS_UDP)
-        std::optional<visionarm::NetworkMediaSinkSnapshot> network_sink_stats;
+#if defined(VISIONARM_HAS_NETWORK_MUX)
+        std::optional<visionarm::FfmpegMpegTsUdpSinkSnapshot> network_mux_stats;
+        bool network_stop_ok = true;
 #endif
-        visionarm::QueueStatsSnapshot audio_encoded_queue_stats;
 #endif
         if (options.audio_enabled) {
             audio_worker->Stop();
-#if defined(VISIONARM_HAS_AV_MUX)
-            if (encoded_av_mux_enabled) {
+#if defined(VISIONARM_HAS_AUDIO_ENCODE)
+            if (encoded_audio_enabled) {
                 audio_encode_worker->Stop();
                 audio_sink_worker->Stop();
-#if defined(VISIONARM_HAS_MP4_MUX)
-                if (local_av_mux_enabled && av_muxer != nullptr) {
+                audio_encode_stats = audio_encode_worker->Snapshot();
+                audio_sink_stats = audio_sink_worker->Snapshot();
+                audio_encoded_queue_stats = audio_encoded_queue->Snapshot();
+#if defined(VISIONARM_HAS_AV_MUX)
+                if (av_mux_enabled) {
                     av_mux_finalize_ok = av_muxer->Finalize();
                     av_mux_stats = av_muxer->Snapshot();
                 }
 #endif
-#if defined(VISIONARM_HAS_MPEGTS_UDP)
-                if (network_av_mux_enabled &&
-                    network_media_sink != nullptr) {
-                    network_media_sink->Stop();
-                    network_sink_stats = network_media_sink->Snapshot();
+#if defined(VISIONARM_HAS_NETWORK_MUX)
+                if (network_mux_enabled) {
+                    network_stop_ok = network_muxer->Stop();
+                    network_mux_stats = network_muxer->Snapshot();
                 }
 #endif
-                audio_encode_stats = audio_encode_worker->Snapshot();
-                audio_sink_stats = audio_sink_worker->Snapshot();
-                audio_encoded_queue_stats = audio_encoded_queue->Snapshot();
             } else {
                 DrainAudioQueue(&audio_pcm_queue, &audio_timeline_stats);
             }
@@ -1318,10 +1308,10 @@ int main(int argc, char** argv) {
                    << audio.capture.status_error_count << '\n';
         }
         WriteQueue(report, "queue.audio_pcm", audio_queue_stats);
-#if defined(VISIONARM_HAS_AV_MUX)
-        report << "encoded_av_mux_enabled="
-               << (encoded_av_mux_enabled ? 1 : 0) << '\n';
-        if (encoded_av_mux_enabled) {
+#if defined(VISIONARM_HAS_AUDIO_ENCODE)
+        report << "encoded_audio_enabled="
+               << (encoded_audio_enabled ? 1 : 0) << '\n';
+        if (encoded_audio_enabled) {
             report << "audio_encode_bitrate_bps=" << options.audio_bitrate << '\n';
             if (audio_encode_stats.has_value()) {
                 const auto& encode = *audio_encode_stats;
@@ -1351,11 +1341,10 @@ int main(int argc, char** argv) {
                 report << "audio_encoded_sink_failures=" << sink.sink_failures << '\n';
             }
         }
-
-        report << "local_av_mux_enabled="
-               << (local_av_mux_enabled ? 1 : 0) << '\n';
-#if defined(VISIONARM_HAS_MP4_MUX)
-        if (local_av_mux_enabled) {
+#endif
+#if defined(VISIONARM_HAS_AV_MUX)
+        report << "local_av_mux_enabled=" << (av_mux_enabled ? 1 : 0) << '\n';
+        if (av_mux_enabled) {
             report << "local_av_output=" << options.av_output << '\n';
             report << "local_av_finalize_ok=" << (av_mux_finalize_ok ? 1 : 0) << '\n';
             if (av_mux_stats.has_value()) {
@@ -1377,49 +1366,51 @@ int main(int argc, char** argv) {
             }
         }
 #endif
-
-        report << "network_av_mux_enabled="
-               << (network_av_mux_enabled ? 1 : 0) << '\n';
-#if defined(VISIONARM_HAS_MPEGTS_UDP)
-        if (network_av_mux_enabled) {
-            report << "network_av_url=" << options.net_udp << '\n';
-            report << "network_video_queue_capacity="
-                   << options.network_video_queue << '\n';
-            report << "network_audio_queue_capacity="
-                   << options.network_audio_queue << '\n';
-            report << "network_reconnect_interval_ms="
-                   << options.network_reconnect_ms << '\n';
-            if (network_sink_stats.has_value()) {
-                const auto& net = *network_sink_stats;
-                report << "network_sink_started=" << (net.started ? 1 : 0) << '\n';
-                report << "network_sink_clean_stop=" << (net.clean_stop ? 1 : 0) << '\n';
-                report << "network_sink_fatal_error=" << (net.fatal_error ? 1 : 0) << '\n';
-                report << "network_sink_last_error=" << net.last_error << '\n';
-                report << "network_connect_attempts=" << net.connect_attempts << '\n';
-                report << "network_connections_opened=" << net.connections_opened << '\n';
-                report << "network_reconnect_successes=" << net.reconnect_successes << '\n';
-                report << "network_disconnect_events=" << net.disconnect_events << '\n';
-                report << "network_mux_finalize_failures=" << net.mux_finalize_failures << '\n';
-                report << "network_video_fragments_received=" << net.video_fragments_received << '\n';
-                report << "network_video_access_units_queued=" << net.video_access_units_queued << '\n';
-                report << "network_video_access_units_sent=" << net.video_access_units_sent << '\n';
-                report << "network_video_dropped_queue_full=" << net.video_access_units_dropped_queue_full << '\n';
-                report << "network_video_dropped_disconnected=" << net.video_access_units_dropped_disconnected << '\n';
-                report << "network_video_dropped_waiting_keyframe=" << net.video_access_units_dropped_waiting_keyframe << '\n';
-                report << "network_video_bytes_queued=" << net.video_bytes_queued << '\n';
-                report << "network_video_bytes_sent=" << net.video_bytes_sent << '\n';
-                report << "network_audio_packets_received=" << net.audio_packets_received << '\n';
-                report << "network_audio_packets_queued=" << net.audio_packets_queued << '\n';
-                report << "network_audio_packets_sent=" << net.audio_packets_sent << '\n';
-                report << "network_audio_dropped_disconnected=" << net.audio_packets_dropped_disconnected << '\n';
-                report << "network_audio_queue_overload_faults=" << net.audio_queue_overload_faults << '\n';
-                report << "network_audio_bytes_queued=" << net.audio_bytes_queued << '\n';
-                report << "network_audio_bytes_sent=" << net.audio_bytes_sent << '\n';
-                WriteQueue(report, "queue.network_video", net.video_queue);
-                WriteQueue(report, "queue.network_audio", net.audio_queue);
+#if defined(VISIONARM_HAS_NETWORK_MUX)
+        report << "network_mux_enabled="
+               << (network_mux_enabled ? 1 : 0) << '\n';
+        if (network_mux_enabled) {
+            report << "network_url=" << options.network_url << '\n';
+            report << "network_queue_capacity=" << options.network_queue << '\n';
+            report << "network_io_timeout_ms="
+                   << options.network_io_timeout_ms << '\n';
+            report << "network_stop_ok=" << (network_stop_ok ? 1 : 0) << '\n';
+            if (network_mux_stats.has_value()) {
+                const auto& network = *network_mux_stats;
+                report << "network_started=" << (network.started ? 1 : 0) << '\n';
+                report << "network_finalized=" << (network.finalized ? 1 : 0) << '\n';
+                report << "network_fatal_error="
+                       << (network.fatal_error ? 1 : 0) << '\n';
+                report << "network_last_error=" << network.last_error << '\n';
+                report << "network_video_fragments_received="
+                       << network.video_fragments_received << '\n';
+                report << "network_video_access_units_enqueued="
+                       << network.video_access_units_enqueued << '\n';
+                report << "network_video_access_units_written="
+                       << network.video_access_units_written << '\n';
+                report << "network_video_bytes_written="
+                       << network.video_bytes_written << '\n';
+                report << "network_audio_packets_enqueued="
+                       << network.audio_packets_enqueued << '\n';
+                report << "network_audio_packets_written="
+                       << network.audio_packets_written << '\n';
+                report << "network_audio_bytes_written="
+                       << network.audio_bytes_written << '\n';
+                report << "network_queue_overload_failures="
+                       << network.queue_overload_failures << '\n';
+                report << "network_write_failures="
+                       << network.write_failures << '\n';
+                report << "network_first_video_pts_us="
+                       << network.first_video_pts_us << '\n';
+                report << "network_last_video_pts_us="
+                       << network.last_video_pts_us << '\n';
+                report << "network_first_audio_pts_ns="
+                       << network.first_audio_pts_ns << '\n';
+                report << "network_last_audio_pts_ns="
+                       << network.last_audio_pts_ns << '\n';
+                WriteQueue(report, "queue.network", network.packet_queue);
             }
         }
-#endif
 #endif
         report << "audio_timeline_chunks=" << audio_timeline_stats.chunks << '\n';
         report << "audio_timeline_frames=" << audio_timeline_stats.frames << '\n';
@@ -1714,9 +1705,8 @@ int main(int argc, char** argv) {
 
         bool audio_encode_ok = true;
         bool local_av_mux_ok = true;
-        bool network_av_mux_ok = true;
-#if defined(VISIONARM_HAS_AV_MUX)
-        if (encoded_av_mux_enabled) {
+#if defined(VISIONARM_HAS_AUDIO_ENCODE)
+        if (encoded_audio_enabled) {
             audio_encode_ok =
                 audio_encode_stats.has_value() &&
                 audio_encode_stats->started &&
@@ -1743,8 +1733,10 @@ int main(int argc, char** argv) {
                 audio_sink_stats->packets_written ==
                     audio_encode_stats->packets_pushed;
         }
-#if defined(VISIONARM_HAS_MP4_MUX)
-        if (local_av_mux_enabled) {
+#endif
+
+#if defined(VISIONARM_HAS_AV_MUX)
+        if (av_mux_enabled) {
             local_av_mux_ok =
                 av_mux_finalize_ok &&
                 av_mux_stats.has_value() &&
@@ -1761,29 +1753,39 @@ int main(int argc, char** argv) {
                     audio_sink_stats->packets_written;
         }
 #endif
-#if defined(VISIONARM_HAS_MPEGTS_UDP)
-        if (network_av_mux_enabled) {
-            network_av_mux_ok =
-                network_sink_stats.has_value() &&
-                network_sink_stats->started &&
-                network_sink_stats->clean_stop &&
-                !network_sink_stats->fatal_error &&
-                network_sink_stats->connections_opened > 0U &&
-                network_sink_stats->video_access_units_sent > 0U &&
-                network_sink_stats->audio_packets_sent > 0U &&
-                network_sink_stats->mux_finalize_failures == 0U &&
-                network_sink_stats->video_access_units_dropped_queue_full == 0U &&
-                network_sink_stats->audio_queue_overload_faults == 0U &&
-                QueueBounded(network_sink_stats->video_queue) &&
-                QueueBounded(network_sink_stats->audio_queue) &&
-                network_sink_stats->video_queue.current_size == 0U &&
-                network_sink_stats->audio_queue.current_size == 0U;
-        }
-#endif
-#endif
         report << "audio_encode_path_ok=" << (audio_encode_ok ? 1 : 0) << '\n';
         report << "local_av_mux_ok=" << (local_av_mux_ok ? 1 : 0) << '\n';
-        report << "network_av_mux_ok=" << (network_av_mux_ok ? 1 : 0) << '\n';
+
+        bool network_mux_ok = true;
+#if defined(VISIONARM_HAS_NETWORK_MUX)
+        if (network_mux_enabled) {
+            network_mux_ok =
+                network_stop_ok &&
+                network_mux_stats.has_value() &&
+                network_mux_stats->started &&
+                network_mux_stats->finalized &&
+                !network_mux_stats->fatal_error &&
+                network_mux_stats->queue_overload_failures == 0U &&
+                network_mux_stats->write_failures == 0U &&
+                network_mux_stats->video_access_units_enqueued > 0U &&
+                network_mux_stats->video_access_units_enqueued ==
+                    stats.video_frames_encoded &&
+                network_mux_stats->video_access_units_written ==
+                    network_mux_stats->video_access_units_enqueued &&
+                network_mux_stats->audio_packets_enqueued > 0U &&
+                audio_sink_stats.has_value() &&
+                network_mux_stats->audio_packets_enqueued ==
+                    audio_sink_stats->packets_written &&
+                network_mux_stats->audio_packets_written ==
+                    network_mux_stats->audio_packets_enqueued &&
+                QueueBounded(network_mux_stats->packet_queue) &&
+                network_mux_stats->packet_queue.replaced_oldest == 0U &&
+                network_mux_stats->packet_queue.current_size == 0U &&
+                network_mux_stats->packet_queue.pushed ==
+                    network_mux_stats->packet_queue.popped;
+        }
+#endif
+        report << "network_mux_ok=" << (network_mux_ok ? 1 : 0) << '\n';
 
         bool control_ok = false;
         if (options.control_backend == ControlBackend::MOCK) {
@@ -1855,7 +1857,7 @@ int main(int argc, char** argv) {
             audio_ok &&
             audio_encode_ok &&
             local_av_mux_ok &&
-            network_av_mux_ok &&
+            network_mux_ok &&
             queues_ok && timing_ok && rss_ok;
 
         report << "vision_pipeline_r7_r8_probe="

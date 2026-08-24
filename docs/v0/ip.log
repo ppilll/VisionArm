@@ -20,6 +20,8 @@ mount -t nfs -o vers=3,nolock,proto=tcp \
     192.168.50.1:/home/liu/linux/nfs \
     /mnt/nfs
 
+ip addr add 192.168.50.2/24 dev eth1
+
 mount -v -t nfs \
   -o vers=3,nolock,proto=tcp,timeo=5,retrans=2 \
   192.168.50.1:/home/liu2004/nfs_dir \
@@ -39,7 +41,3 @@ git apply --stat --directory=visionram visionram/visionram_v8_4_complete.patch
 git apply --check --verbose --directory=visionram visionram/visionram_v8_4_complete.patch
 git apply --verbose --directory=visionram visionram/visionram_v8_4_complete.patch
 
-visionram/tools/receive_v8_4_udp.sh \
-    5600 \
-    20 \
-    ./v8_4_udp_capture.ts
