@@ -113,6 +113,10 @@ struct Options {
     std::string network_url;
     int network_queue = 256;
     int network_io_timeout_ms = 1'000;
+    int network_rate_bps = 0;
+    int network_burst_bits = 0;
+    int network_packet_size = 1'316;
+    int network_send_buffer_bytes = 4 * 1'024 * 1'024;
     int acquire_hits = 2;
     int lost_misses = 3;
     int max_result_age_ms = 100;
@@ -127,6 +131,28 @@ struct Options {
         visionarm::InferenceThreadTopology::FUSED_NPU_POSTPROCESS;
 };
 
+[[nodiscard]] std::int64_t EffectiveNetworkRateBps(
+    const Options& options) noexcept {
+    if (options.network_rate_bps > 0) {
+        return options.network_rate_bps;
+    }
+    const std::int64_t encoded_rate =
+        static_cast<std::int64_t>(options.bitrate) + options.audio_bitrate;
+    return (encoded_rate * 6LL + 4LL) / 5LL;
+}
+
+[[nodiscard]] std::int64_t EffectiveNetworkBurstBits(
+    const Options& options) noexcept {
+    if (options.network_burst_bits > 0) {
+        return options.network_burst_bits;
+    }
+    const std::int64_t eight_datagrams =
+        static_cast<std::int64_t>(options.network_packet_size) * 8LL * 8LL;
+    return std::max(
+        EffectiveNetworkRateBps(options) / static_cast<std::int64_t>(100),
+        eight_datagrams);
+}
+
 [[noreturn]] void Usage(const char* program) {
     std::cerr
         << "Usage: " << program << " \\\n"
@@ -139,8 +165,11 @@ struct Options {
         << "  [--audio-buffer-frames 4096] [--audio-queue 16] [--audio-disable] \\\n"
         << "  [--av-output recording.mp4] [--audio-bitrate 128000] \\\n"
         << "  [--audio-encoded-queue 32] \\\n"
-        << "  [--network-url 'udp://PC:5000?pkt_size=1316'] \\\n"
+        << "  [--network-url 'udp://PC:5000'] \\\n"
         << "  [--network-queue 256] [--network-io-timeout-ms 1000] \\\n"
+        << "  [--network-rate-bps 0] [--network-burst-bits 0] \\\n"
+        << "  [--network-packet-size 1316] \\\n"
+        << "  [--network-send-buffer-bytes 4194304] \\\n"
         << "  [--topology fused|split] [--input-slots N] [--output-slots N] \\\n"
         << "  [--acquire-hits N] [--lost-misses N] \\\n"
         << "  [--max-result-age-ms N] [--latency-samples N] \\\n"
@@ -271,6 +300,10 @@ Options ParseOptions(int argc, char** argv) {
         else if (key == "--network-url") options.network_url = next();
         else if (key == "--network-queue") options.network_queue = ParsePositiveInt(next(), "network queue");
         else if (key == "--network-io-timeout-ms") options.network_io_timeout_ms = ParsePositiveInt(next(), "network I/O timeout");
+        else if (key == "--network-rate-bps") options.network_rate_bps = ParseNonnegativeInt(next(), "network rate");
+        else if (key == "--network-burst-bits") options.network_burst_bits = ParseNonnegativeInt(next(), "network burst");
+        else if (key == "--network-packet-size") options.network_packet_size = ParsePositiveInt(next(), "network packet size");
+        else if (key == "--network-send-buffer-bytes") options.network_send_buffer_bytes = ParsePositiveInt(next(), "network send buffer");
         else if (key == "--audio-disable") options.audio_enabled = false;
         else if (key == "--input-slots") options.input_slots = ParsePositiveInt(next(), "input slots");
         else if (key == "--output-slots") options.output_slots = ParsePositiveInt(next(), "output slots");
@@ -364,6 +397,11 @@ Options ParseOptions(int argc, char** argv) {
         options.network_url.rfind("udp://", 0U) != 0U) {
         throw std::invalid_argument(
             "V8.4 P0 network URL must start with udp://");
+    }
+    if (options.network_packet_size > 65'507 ||
+        options.network_packet_size % 188 != 0) {
+        throw std::invalid_argument(
+            "network packet size must be a multiple of 188 and <= 65507");
     }
 #if !defined(VISIONARM_HAS_AV_MUX)
     if (!options.av_output.empty()) {
@@ -1022,6 +1060,13 @@ int main(int argc, char** argv) {
                 network_config.io_timeout_us =
                     static_cast<std::int64_t>(options.network_io_timeout_ms) *
                     1'000LL;
+                network_config.udp_packet_size = options.network_packet_size;
+                network_config.udp_send_buffer_bytes =
+                    options.network_send_buffer_bytes;
+                network_config.udp_bit_rate_bps =
+                    EffectiveNetworkRateBps(options);
+                network_config.udp_burst_bits =
+                    EffectiveNetworkBurstBits(options);
 
                 network_muxer =
                     std::make_unique<visionarm::FfmpegMpegTsUdpSink>();
@@ -1033,6 +1078,11 @@ int main(int argc, char** argv) {
                 std::cout << "network A/V enabled url=" << options.network_url
                           << " packet_queue=" << options.network_queue
                           << " io_timeout_ms=" << options.network_io_timeout_ms
+                          << " rate_bps=" << network_config.udp_bit_rate_bps
+                          << " burst_bits=" << network_config.udp_burst_bits
+                          << " packet_size=" << network_config.udp_packet_size
+                          << " send_buffer_bytes="
+                          << network_config.udp_send_buffer_bytes
                           << '\n';
             }
 #endif
@@ -1374,6 +1424,14 @@ int main(int argc, char** argv) {
             report << "network_queue_capacity=" << options.network_queue << '\n';
             report << "network_io_timeout_ms="
                    << options.network_io_timeout_ms << '\n';
+            report << "network_rate_bps="
+                   << EffectiveNetworkRateBps(options) << '\n';
+            report << "network_burst_bits="
+                   << EffectiveNetworkBurstBits(options) << '\n';
+            report << "network_packet_size="
+                   << options.network_packet_size << '\n';
+            report << "network_send_buffer_bytes="
+                   << options.network_send_buffer_bytes << '\n';
             report << "network_stop_ok=" << (network_stop_ok ? 1 : 0) << '\n';
             if (network_mux_stats.has_value()) {
                 const auto& network = *network_mux_stats;
@@ -1390,6 +1448,8 @@ int main(int argc, char** argv) {
                        << network.video_access_units_written << '\n';
                 report << "network_video_bytes_written="
                        << network.video_bytes_written << '\n';
+                report << "network_video_parameter_set_injections="
+                       << network.video_parameter_set_injections << '\n';
                 report << "network_audio_packets_enqueued="
                        << network.audio_packets_enqueued << '\n';
                 report << "network_audio_packets_written="

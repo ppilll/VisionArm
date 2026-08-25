@@ -27,6 +27,49 @@ namespace {
 constexpr AVRational kVideoTimeBase{1, 1'000'000};
 constexpr AVRational kAudioTimeBase{1, 1'000'000'000};
 
+struct HevcParameterSets {
+    bool vps = false;
+    bool sps = false;
+    bool pps = false;
+
+    [[nodiscard]] bool Complete() const noexcept {
+        return vps && sps && pps;
+    }
+};
+
+[[nodiscard]] std::size_t AnnexBStartCodeSize(
+    const std::vector<std::uint8_t>& bytes,
+    std::size_t offset) noexcept {
+    if (offset + 3U <= bytes.size() && bytes[offset] == 0U &&
+        bytes[offset + 1U] == 0U && bytes[offset + 2U] == 1U) {
+        return 3U;
+    }
+    if (offset + 4U <= bytes.size() && bytes[offset] == 0U &&
+        bytes[offset + 1U] == 0U && bytes[offset + 2U] == 0U &&
+        bytes[offset + 3U] == 1U) {
+        return 4U;
+    }
+    return 0U;
+}
+
+[[nodiscard]] HevcParameterSets FindHevcParameterSets(
+    const std::vector<std::uint8_t>& bytes) noexcept {
+    HevcParameterSets sets;
+    for (std::size_t offset = 0U; offset < bytes.size(); ++offset) {
+        const std::size_t start_code = AnnexBStartCodeSize(bytes, offset);
+        if (start_code == 0U || offset + start_code >= bytes.size()) {
+            continue;
+        }
+        const std::uint8_t nal_type =
+            static_cast<std::uint8_t>((bytes[offset + start_code] >> 1U) & 0x3fU);
+        sets.vps = sets.vps || nal_type == 32U;
+        sets.sps = sets.sps || nal_type == 33U;
+        sets.pps = sets.pps || nal_type == 34U;
+        offset += start_code;
+    }
+    return sets;
+}
+
 [[nodiscard]] std::string AvErrorString(int error) {
     char text[AV_ERROR_MAX_STRING_SIZE]{};
     if (av_strerror(error, text, sizeof(text)) == 0) {
@@ -34,6 +77,21 @@ constexpr AVRational kAudioTimeBase{1, 1'000'000'000};
     }
     std::ostringstream stream;
     stream << "FFmpeg error " << error;
+    return stream.str();
+}
+
+[[nodiscard]] std::string DictionaryKeys(const AVDictionary* dictionary) {
+    std::ostringstream stream;
+    const AVDictionaryEntry* entry = nullptr;
+    bool first = true;
+    while ((entry = av_dict_get(
+                dictionary, "", entry, AV_DICT_IGNORE_SUFFIX)) != nullptr) {
+        if (!first) {
+            stream << ',';
+        }
+        stream << entry->key;
+        first = false;
+    }
     return stream.str();
 }
 
@@ -262,8 +320,17 @@ void FfmpegMpegTsUdpSink::Initialize(
         config.video_bit_rate_bps <= 0 || config.video_fps_numerator <= 0 ||
         config.video_fps_denominator <= 0 ||
         config.hevc_annexb_codec_config.empty() || !config.audio.Valid() ||
-        config.packet_queue_capacity == 0U || config.io_timeout_us <= 0) {
+        config.packet_queue_capacity == 0U || config.io_timeout_us <= 0 ||
+        config.udp_packet_size <= 0 || config.udp_packet_size > 65'507 ||
+        config.udp_packet_size % 188 != 0 ||
+        config.udp_send_buffer_bytes <= 0 ||
+        config.udp_bit_rate_bps <= 0 || config.udp_burst_bits <= 0 ||
+        config.max_interleave_delta_us < 0) {
         throw std::invalid_argument("invalid MPEG-TS/UDP sink config");
+    }
+    if (!FindHevcParameterSets(config.hevc_annexb_codec_config).Complete()) {
+        throw std::invalid_argument(
+            "HEVC Annex-B config must contain VPS, SPS and PPS");
     }
 
     impl_->config = config;
@@ -340,11 +407,21 @@ void FfmpegMpegTsUdpSink::Initialize(
 
     impl_->format->flags |= AVFMT_FLAG_FLUSH_PACKETS;
     impl_->format->max_delay = 0;
+    impl_->format->max_interleave_delta = config.max_interleave_delta_us;
     impl_->format->avoid_negative_ts = AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
 
     AVDictionary* io_options = nullptr;
     const std::string timeout = std::to_string(config.io_timeout_us);
+    const std::string packet_size = std::to_string(config.udp_packet_size);
+    const std::string send_buffer =
+        std::to_string(config.udp_send_buffer_bytes);
+    const std::string bit_rate = std::to_string(config.udp_bit_rate_bps);
+    const std::string burst_bits = std::to_string(config.udp_burst_bits);
     av_dict_set(&io_options, "rw_timeout", timeout.c_str(), 0);
+    av_dict_set(&io_options, "pkt_size", packet_size.c_str(), 0);
+    av_dict_set(&io_options, "buffer_size", send_buffer.c_str(), 0);
+    av_dict_set(&io_options, "bitrate", bit_rate.c_str(), 0);
+    av_dict_set(&io_options, "burst_bits", burst_bits.c_str(), 0);
     if ((impl_->format->oformat->flags & AVFMT_NOFILE) == 0) {
         result = avio_open2(
             &impl_->format->pb,
@@ -353,11 +430,18 @@ void FfmpegMpegTsUdpSink::Initialize(
             nullptr,
             &io_options);
     }
+    const std::string unused_io_options = DictionaryKeys(io_options);
     av_dict_free(&io_options);
     if (result < 0) {
         impl_->CloseFormat();
         throw std::runtime_error(
             "avio_open2(udp) failed: " + AvErrorString(result));
+    }
+    if (!unused_io_options.empty()) {
+        impl_->CloseFormat();
+        throw std::runtime_error(
+            "FFmpeg UDP protocol did not accept options: " +
+            unused_io_options);
     }
 
     AVDictionary* mux_options = nullptr;
@@ -429,12 +513,31 @@ bool FfmpegMpegTsUdpSink::Write(const EncodedPacket& packet) noexcept {
     NetworkPacket complete = std::move(impl_->pending_video);
     impl_->pending_video = {};
     impl_->have_pending_video = false;
+    bool parameter_sets_injected = false;
+    if (complete.keyframe &&
+        !FindHevcParameterSets(complete.data).Complete()) {
+        std::vector<std::uint8_t> self_contained;
+        self_contained.reserve(
+            impl_->config.hevc_annexb_codec_config.size() +
+            complete.data.size());
+        self_contained.insert(
+            self_contained.end(),
+            impl_->config.hevc_annexb_codec_config.begin(),
+            impl_->config.hevc_annexb_codec_config.end());
+        self_contained.insert(
+            self_contained.end(), complete.data.begin(), complete.data.end());
+        complete.data = std::move(self_contained);
+        parameter_sets_injected = true;
+    }
     if (!impl_->queue->TryPush(std::move(complete))) {
         impl_->SetError("MPEG-TS/UDP packet queue overloaded", true);
         return false;
     }
     std::lock_guard<std::mutex> stats_lock(impl_->mutex);
     ++impl_->snapshot.video_access_units_enqueued;
+    if (parameter_sets_injected) {
+        ++impl_->snapshot.video_parameter_set_injections;
+    }
     return true;
 }
 
