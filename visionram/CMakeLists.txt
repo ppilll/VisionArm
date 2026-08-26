@@ -487,6 +487,7 @@ if(VISIONARM_BUILD_RUNTIME)
         src/pipeline/inference_pipeline.cpp
         src/pipeline/target_state_machine.cpp
         src/preprocess/letterbox_geometry.cpp
+        src/telemetry/udp_telemetry_sink.cpp
         src/video/h265_file_sink.cpp
         src/video/nv12_mpp_layout.cpp)
 
@@ -859,6 +860,17 @@ if(VISIONARM_BUILD_TESTS)
         PRIVATE
             visionarm::contract)
 
+    add_executable(
+        udp_telemetry_sink_test
+        tests/udp_telemetry_sink_test.cpp
+        src/telemetry/udp_telemetry_sink.cpp
+        src/common/monotonic_clock.cpp)
+    target_link_libraries(
+        udp_telemetry_sink_test
+        PRIVATE
+            visionarm::contract
+            Threads::Threads)
+
     if(VISIONARM_ENABLE_UART_CONTROL)
         add_executable(
             uart_control_sink_test
@@ -889,7 +901,8 @@ if(VISIONARM_BUILD_TESTS)
             bounded_queue_metrics_test
             audio_chunk_contract_test
             media_clock_test
-            encoded_audio_packet_contract_test)
+            encoded_audio_packet_contract_test
+            udp_telemetry_sink_test)
         target_compile_options(
             ${test_target}
             PRIVATE
@@ -946,6 +959,21 @@ if(VISIONARM_BUILD_TESTS)
     add_test(
         NAME encoded_audio_packet_contract_test
         COMMAND encoded_audio_packet_contract_test)
+    add_test(
+        NAME udp_telemetry_sink_test
+        COMMAND udp_telemetry_sink_test)
+
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME v8_5_overlay_core_test
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/v8_5_overlay_core_test.py)
+        set_tests_properties(
+            v8_5_overlay_core_test
+            PROPERTIES TIMEOUT 15)
+    endif()
 
     set_tests_properties(
         target_state_machine_test
@@ -954,6 +982,7 @@ if(VISIONARM_BUILD_TESTS)
         audio_chunk_contract_test
         media_clock_test
         encoded_audio_packet_contract_test
+        udp_telemetry_sink_test
         PROPERTIES TIMEOUT 15)
 
     if(VISIONARM_ENABLE_UART_CONTROL)

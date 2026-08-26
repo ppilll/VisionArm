@@ -131,6 +131,7 @@ bool InferencePipeline::Start() {
             camera_->buffer_count(), std::memory_order_release);
         stop_requested_.store(false, std::memory_order_release);
         fatal_error_.store(false, std::memory_order_release);
+        video_branch_failed_.store(false, std::memory_order_release);
         running_.store(true, std::memory_order_release);
         started_once_ = true;
 
@@ -184,6 +185,15 @@ void InferencePipeline::SignalFailure() noexcept {
     completed_frames_.Stop();
     free_input_slots_.Stop();
     free_output_slots_.Stop();
+}
+
+void InferencePipeline::SignalVideoFailure() noexcept {
+    video_branch_failed_.store(true, std::memory_order_release);
+    // Do not request Camera/Inference stop. Closing only the video queues
+    // wakes their workers; Capture will release future video leases while it
+    // continues feeding the independent latest-frame inference queue.
+    video_frames_.Stop();
+    encoded_packets_.Stop();
 }
 
 void InferencePipeline::Stop() noexcept {
@@ -354,16 +364,29 @@ void InferencePipeline::CaptureLoop() noexcept {
             }
 
             if (config_.enable_video) {
-                if (!dispatch.video_encoder ||
-                    !video_frames_.WaitPush(std::move(dispatch.video_encoder))) {
-                    if (dispatch.video_encoder) {
-                        (void)dispatch.video_encoder->Release(
-                            FrameReleaseReason::PIPELINE_STOP);
-                    }
+                if (!dispatch.video_encoder) {
+                    SignalFailure();
                     break;
                 }
-                video_frames_enqueued_count_.fetch_add(
-                    1U, std::memory_order_relaxed);
+                std::optional<FrameLeasePtr> evicted_video;
+                if (video_frames_.PushLatest(
+                        std::move(dispatch.video_encoder), &evicted_video)) {
+                    video_frames_enqueued_count_.fetch_add(
+                        1U, std::memory_order_relaxed);
+                    if (evicted_video.has_value() && *evicted_video) {
+                        video_frames_dropped_count_.fetch_add(
+                            1U, std::memory_order_relaxed);
+                        (void)(*evicted_video)->Release(
+                            FrameReleaseReason::REPLACED_BY_NEWER_FRAME);
+                    }
+                } else {
+                    video_frames_dropped_count_.fetch_add(
+                        1U, std::memory_order_relaxed);
+                    if (evicted_video.has_value() && *evicted_video) {
+                        (void)(*evicted_video)->Release(
+                            FrameReleaseReason::PIPELINE_STOP);
+                    }
+                }
             }
         }
     } catch (const std::exception& error) {
@@ -389,7 +412,8 @@ void InferencePipeline::VideoLoop() noexcept {
             if (!source) {
                 continue;
             }
-            if (fatal_error_.load(std::memory_order_acquire)) {
+            if (fatal_error_.load(std::memory_order_acquire) ||
+                video_branch_failed_.load(std::memory_order_acquire)) {
                 (void)source->Release(FrameReleaseReason::PIPELINE_STOP);
                 source.reset();
                 continue;
@@ -406,7 +430,7 @@ void InferencePipeline::VideoLoop() noexcept {
             if (!encoded) {
                 video_encode_failure_count_.fetch_add(
                     1U, std::memory_order_relaxed);
-                SignalFailure();
+                SignalVideoFailure();
                 break;
             }
             video_frames_encoded_count_.fetch_add(
@@ -429,13 +453,13 @@ void InferencePipeline::VideoLoop() noexcept {
         if (source && source->valid()) {
             (void)source->Release(FrameReleaseReason::PROCESSING_ERROR);
         }
-        SignalFailure();
+        SignalVideoFailure();
     } catch (...) {
         std::cerr << "video thread failed with an unknown exception\n";
         if (source && source->valid()) {
             (void)source->Release(FrameReleaseReason::PROCESSING_ERROR);
         }
-        SignalFailure();
+        SignalVideoFailure();
     }
 
     source.reset();
@@ -455,17 +479,17 @@ void InferencePipeline::EncodedPacketLoop() noexcept {
             if (!encoded_packet_sink_->Write(packet)) {
                 video_sink_failure_count_.fetch_add(
                     1U, std::memory_order_relaxed);
-                SignalFailure();
+                SignalVideoFailure();
                 break;
             }
         }
         encoded_packet_sink_->Flush();
     } catch (const std::exception& error) {
         std::cerr << "encoded packet sink failed: " << error.what() << '\n';
-        SignalFailure();
+        SignalVideoFailure();
     } catch (...) {
         std::cerr << "encoded packet sink failed with unknown exception\n";
-        SignalFailure();
+        SignalVideoFailure();
     }
 }
 
@@ -894,6 +918,8 @@ PipelineStatsSnapshot InferencePipeline::stats() const noexcept {
         dmabuf_sync_failure_count_.load(std::memory_order_relaxed);
     snapshot.video_frames_enqueued =
         video_frames_enqueued_count_.load(std::memory_order_relaxed);
+    snapshot.video_frames_dropped =
+        video_frames_dropped_count_.load(std::memory_order_relaxed);
     snapshot.video_frames_encoded =
         video_frames_encoded_count_.load(std::memory_order_relaxed);
     snapshot.video_encode_failures =
@@ -914,6 +940,8 @@ PipelineStatsSnapshot InferencePipeline::stats() const noexcept {
     snapshot.broker_outstanding_leases_before_camera_stop =
         broker_outstanding_leases_before_stop_.load(std::memory_order_relaxed);
     snapshot.fatal_error = fatal_error_.load(std::memory_order_relaxed);
+    snapshot.video_branch_failed =
+        video_branch_failed_.load(std::memory_order_relaxed);
     snapshot.graceful_shutdown_completed =
         graceful_shutdown_completed_.load(std::memory_order_relaxed);
     snapshot.split_final_completed_frame_drained =
@@ -943,6 +971,21 @@ PipelineStatsSnapshot InferencePipeline::stats() const noexcept {
     snapshot.timing.postprocess = postprocess_duration_.Snapshot();
     snapshot.timing.capture_to_result = capture_to_result_.Snapshot();
     snapshot.timing.result_age = result_age_.Snapshot();
+    return snapshot;
+}
+
+PipelineRuntimeCounters InferencePipeline::runtime_counters() const noexcept {
+    PipelineRuntimeCounters snapshot;
+    snapshot.captured_frames =
+        captured_count_.load(std::memory_order_relaxed);
+    snapshot.inference_successes =
+        inference_success_count_.load(std::memory_order_relaxed);
+    snapshot.video_frames_encoded =
+        video_frames_encoded_count_.load(std::memory_order_relaxed);
+    snapshot.running = running_.load(std::memory_order_acquire);
+    snapshot.fatal_error = fatal_error_.load(std::memory_order_acquire);
+    snapshot.video_branch_failed =
+        video_branch_failed_.load(std::memory_order_acquire);
     return snapshot;
 }
 

@@ -30,6 +30,7 @@
 #include "preprocess/rga_letterbox_preprocessor.h"
 #include "video/h265_file_sink.h"
 #include "video/mpp_h265_encoder.h"
+#include "telemetry/udp_telemetry_sink.h"
 
 #include <algorithm>
 #include <array>
@@ -117,6 +118,10 @@ struct Options {
     int network_burst_bits = 0;
     int network_packet_size = 1'316;
     int network_send_buffer_bytes = 4 * 1'024 * 1'024;
+    std::string telemetry_host;
+    int telemetry_port = 5'001;
+    int telemetry_interval_ms = 100;
+    int telemetry_send_buffer_bytes = 1 * 1'024 * 1'024;
     int acquire_hits = 2;
     int lost_misses = 3;
     int max_result_age_ms = 100;
@@ -170,6 +175,9 @@ struct Options {
         << "  [--network-rate-bps 0] [--network-burst-bits 0] \\\n"
         << "  [--network-packet-size 1316] \\\n"
         << "  [--network-send-buffer-bytes 4194304] \\\n"
+        << "  [--telemetry-host PC] [--telemetry-port 5001] \\\n"
+        << "  [--telemetry-interval-ms 100] \\\n"
+        << "  [--telemetry-send-buffer-bytes 1048576] \\\n"
         << "  [--topology fused|split] [--input-slots N] [--output-slots N] \\\n"
         << "  [--acquire-hits N] [--lost-misses N] \\\n"
         << "  [--max-result-age-ms N] [--latency-samples N] \\\n"
@@ -304,6 +312,10 @@ Options ParseOptions(int argc, char** argv) {
         else if (key == "--network-burst-bits") options.network_burst_bits = ParseNonnegativeInt(next(), "network burst");
         else if (key == "--network-packet-size") options.network_packet_size = ParsePositiveInt(next(), "network packet size");
         else if (key == "--network-send-buffer-bytes") options.network_send_buffer_bytes = ParsePositiveInt(next(), "network send buffer");
+        else if (key == "--telemetry-host") options.telemetry_host = next();
+        else if (key == "--telemetry-port") options.telemetry_port = ParsePositiveInt(next(), "telemetry port");
+        else if (key == "--telemetry-interval-ms") options.telemetry_interval_ms = ParsePositiveInt(next(), "telemetry interval");
+        else if (key == "--telemetry-send-buffer-bytes") options.telemetry_send_buffer_bytes = ParsePositiveInt(next(), "telemetry send buffer");
         else if (key == "--audio-disable") options.audio_enabled = false;
         else if (key == "--input-slots") options.input_slots = ParsePositiveInt(next(), "input slots");
         else if (key == "--output-slots") options.output_slots = ParsePositiveInt(next(), "output slots");
@@ -402,6 +414,14 @@ Options ParseOptions(int argc, char** argv) {
         options.network_packet_size % 188 != 0) {
         throw std::invalid_argument(
             "network packet size must be a multiple of 188 and <= 65507");
+    }
+    if (options.telemetry_port > 65'535) {
+        throw std::invalid_argument("telemetry port must be <= 65535");
+    }
+    if (options.telemetry_interval_ms < 20 ||
+        options.telemetry_interval_ms > 60'000) {
+        throw std::invalid_argument(
+            "telemetry interval must be in [20, 60000] ms");
     }
 #if !defined(VISIONARM_HAS_AV_MUX)
     if (!options.av_output.empty()) {
@@ -855,6 +875,7 @@ int main(int argc, char** argv) {
         visionarm::LatestResultStore latest_perception;
         visionarm::MockControlSink mock_control_sink;
         visionarm::IControlSink* selected_control_sink = &mock_control_sink;
+        std::unique_ptr<visionarm::UdpTelemetrySink> telemetry_sink;
 
 #if defined(VISIONARM_HAS_UART_CONTROL)
         std::unique_ptr<visionarm::uart::UartLink> uart_link;
@@ -888,6 +909,36 @@ int main(int argc, char** argv) {
                       << " baud=" << options.uart_baud << '\n';
         }
 #endif
+
+        const bool telemetry_enabled = !options.telemetry_host.empty();
+        bool telemetry_start_ok = true;
+        std::string telemetry_start_error;
+        if (telemetry_enabled) {
+            visionarm::UdpTelemetrySinkConfig telemetry_config;
+            telemetry_config.host = options.telemetry_host;
+            telemetry_config.port =
+                static_cast<std::uint16_t>(options.telemetry_port);
+            telemetry_config.interval_ms =
+                static_cast<std::uint32_t>(options.telemetry_interval_ms);
+            telemetry_config.send_buffer_bytes =
+                options.telemetry_send_buffer_bytes;
+            telemetry_config.control_backend =
+                ControlBackendName(options.control_backend);
+            telemetry_sink =
+                std::make_unique<visionarm::UdpTelemetrySink>(telemetry_config);
+            if (!telemetry_sink->Start(&telemetry_start_error)) {
+                telemetry_start_ok = false;
+                std::cerr << "telemetry disabled after Start failure: "
+                          << telemetry_start_error << '\n';
+            } else {
+                std::cout << "telemetry enabled destination="
+                          << options.telemetry_host << ':'
+                          << options.telemetry_port
+                          << " interval_ms=" << options.telemetry_interval_ms
+                          << " send_buffer_bytes="
+                          << options.telemetry_send_buffer_bytes << '\n';
+            }
+        }
 
         visionarm::TargetStateMachineConfig state_config;
         state_config.acquire_hits =
@@ -1175,12 +1226,108 @@ int main(int argc, char** argv) {
             throw std::runtime_error("pipeline Start failed");
         }
 
+        const std::int64_t telemetry_rate_epoch_ns =
+            visionarm::MonotonicNowNs();
+        std::uint64_t last_telemetry_capture_session_id = 0U;
+        std::uint64_t last_telemetry_frame_id = 0U;
+        bool have_telemetry_control = false;
+        auto update_telemetry = [&]() noexcept {
+            if (!telemetry_enabled) return true;
+            if (!telemetry_start_ok) return false;
+            const auto latest = latest_perception.GetCopy();
+            if (latest.has_value() && latest->result.target.has_value() &&
+                (!have_telemetry_control ||
+                 latest->identity.capture_session_id !=
+                     last_telemetry_capture_session_id ||
+                 latest->identity.frame_id != last_telemetry_frame_id)) {
+                visionarm::ControlResult control;
+                control.identity = latest->identity;
+                control.state = latest->result.target->state;
+                control.valid = latest->result.error.valid;
+                control.observation = *latest->result.target;
+                control.error = latest->result.error;
+                control.capture_timestamp_ns =
+                    latest->identity.capture_timestamp_ns;
+                control.generated_timestamp_ns =
+                    latest->generated_timestamp_ns;
+                control.age_ns = latest->result_age_ns;
+                const auto state = state_machine.Snapshot();
+                control.consecutive_hits = state.consecutive_hits;
+                control.consecutive_misses = state.consecutive_misses;
+                if (!telemetry_sink->UpdateControl(control)) return false;
+                last_telemetry_capture_session_id =
+                    latest->identity.capture_session_id;
+                last_telemetry_frame_id = latest->identity.frame_id;
+                have_telemetry_control = true;
+            }
+            const visionarm::PipelineRuntimeCounters counters =
+                pipeline.runtime_counters();
+            visionarm::TelemetryRuntimeStatus status;
+            status.sample_monotonic_ns = visionarm::MonotonicNowNs();
+            status.media_epoch_monotonic_ns =
+                media_clock.epoch_monotonic_ns();
+            status.pipeline_running = counters.running;
+            status.pipeline_fatal_error = counters.fatal_error;
+            status.captured_frames = counters.captured_frames;
+            status.inference_results = counters.inference_successes;
+            status.video_frames_encoded = counters.video_frames_encoded;
+            const std::int64_t elapsed_ns =
+                status.sample_monotonic_ns - telemetry_rate_epoch_ns;
+            if (elapsed_ns > 0) {
+                const double seconds =
+                    static_cast<double>(elapsed_ns) / 1'000'000'000.0;
+                status.camera_fps =
+                    static_cast<double>(counters.captured_frames) / seconds;
+                status.inference_fps =
+                    static_cast<double>(counters.inference_successes) / seconds;
+            }
+#if defined(VISIONARM_HAS_AV_MUX)
+            if (av_mux_enabled) {
+                const auto recording = av_muxer->Snapshot();
+                status.recording_state = recording.fatal_error
+                    ? visionarm::TelemetryOutputState::FATAL
+                    : (recording.finalized
+                        ? visionarm::TelemetryOutputState::FINALIZED
+                        : (recording.header_written
+                            ? visionarm::TelemetryOutputState::RUNNING
+                            : visionarm::TelemetryOutputState::STARTING));
+                status.recording_video_samples =
+                    recording.video_samples_written;
+                status.recording_audio_packets =
+                    recording.audio_packets_written;
+            }
+#endif
+#if defined(VISIONARM_HAS_NETWORK_MUX)
+            if (network_mux_enabled) {
+                const auto network = network_muxer->Snapshot();
+                status.network_state = network.fatal_error
+                    ? visionarm::TelemetryOutputState::FATAL
+                    : (network.finalized
+                        ? visionarm::TelemetryOutputState::FINALIZED
+                        : (network.running
+                            ? visionarm::TelemetryOutputState::RUNNING
+                            : visionarm::TelemetryOutputState::STARTING));
+                status.network_video_access_units =
+                    network.video_access_units_written;
+                status.network_audio_packets = network.audio_packets_written;
+            }
+#endif
+            return telemetry_sink->UpdateRuntime(status);
+        };
+        bool telemetry_runtime_fault = !telemetry_start_ok;
+        if (!telemetry_runtime_fault && !update_telemetry()) {
+            telemetry_runtime_fault = true;
+            std::cerr
+                << "telemetry initial update failed; pipeline remains active\n";
+        }
+
         RssSamples rss;
         rss.Add(ReadVmRssKb());
         const auto deadline = std::chrono::steady_clock::now() +
             std::chrono::seconds(options.duration_seconds);
         auto next_rss_sample = std::chrono::steady_clock::now() +
             std::chrono::seconds(1);
+        bool auxiliary_media_runtime_fault = false;
         while (!g_stop.load(std::memory_order_acquire) &&
                std::chrono::steady_clock::now() < deadline &&
                pipeline.running()) {
@@ -1206,16 +1353,32 @@ int main(int argc, char** argv) {
 #endif
                 }
                 if (encoded_path_fatal) {
-                    break;
+                    if (!auxiliary_media_runtime_fault) {
+                        std::cerr
+                            << "audio/mux/network runtime fault; inference "
+                            << "remains active\n";
+                    }
+                    auxiliary_media_runtime_fault = true;
                 }
 #else
                 DrainAudioQueue(&audio_pcm_queue, &audio_timeline_stats);
 #endif
                 if (audio_worker->Snapshot().fatal_error) {
-                    break;
+                    if (!auxiliary_media_runtime_fault) {
+                        std::cerr
+                            << "audio runtime fault; inference remains active\n";
+                    }
+                    auxiliary_media_runtime_fault = true;
                 }
             }
 #endif
+            if (telemetry_enabled && !telemetry_runtime_fault &&
+                (!update_telemetry() ||
+                 telemetry_sink->Snapshot().fatal_error)) {
+                telemetry_runtime_fault = true;
+                std::cerr
+                    << "telemetry runtime fault; pipeline remains active\n";
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             if (std::chrono::steady_clock::now() >= next_rss_sample) {
                 rss.Add(ReadVmRssKb());
@@ -1270,6 +1433,16 @@ int main(int argc, char** argv) {
         const visionarm::QueueStatsSnapshot audio_queue_stats =
             audio_pcm_queue.Snapshot();
 #endif
+        std::optional<visionarm::UdpTelemetrySinkSnapshot> telemetry_stats;
+        bool telemetry_final_update_ok = true;
+        bool telemetry_stop_ok = true;
+        if (telemetry_enabled) {
+            telemetry_final_update_ok =
+                !telemetry_runtime_fault && update_telemetry();
+            telemetry_stop_ok = telemetry_start_ok
+                ? telemetry_sink->Stop() : false;
+            telemetry_stats = telemetry_sink->Snapshot();
+        }
         const visionarm::MediaClockSnapshot media_clock_stats =
             media_clock.Snapshot();
         rss.Add(ReadVmRssKb());
@@ -1324,6 +1497,8 @@ int main(int argc, char** argv) {
         report << "camera_isp_height=" << camera_format.height << '\n';
         report << "media_epoch_monotonic_ns="
                << media_clock_stats.media_epoch_monotonic_ns << '\n';
+        report << "auxiliary_media_runtime_fault="
+               << (auxiliary_media_runtime_fault ? 1 : 0) << '\n';
 #if defined(VISIONARM_HAS_ALSA_AUDIO)
         report << "audio_enabled=" << (options.audio_enabled ? 1 : 0) << '\n';
         if (options.audio_enabled && audio_worker_stats.has_value()) {
@@ -1528,6 +1703,54 @@ int main(int argc, char** argv) {
             report << "uart_ready_timeout_ms="
                    << options.uart_ready_timeout_ms << '\n';
         }
+        report << "telemetry_enabled=" << (telemetry_enabled ? 1 : 0) << '\n';
+        if (telemetry_enabled) {
+            report << "telemetry_host=" << options.telemetry_host << '\n';
+            report << "telemetry_port=" << options.telemetry_port << '\n';
+            report << "telemetry_interval_ms="
+                   << options.telemetry_interval_ms << '\n';
+            report << "telemetry_send_buffer_bytes="
+                   << options.telemetry_send_buffer_bytes << '\n';
+            report << "telemetry_start_ok="
+                   << (telemetry_start_ok ? 1 : 0) << '\n';
+            report << "telemetry_start_error="
+                   << telemetry_start_error << '\n';
+            report << "telemetry_runtime_fault="
+                   << (telemetry_runtime_fault ? 1 : 0) << '\n';
+            report << "telemetry_final_update_ok="
+                   << (telemetry_final_update_ok ? 1 : 0) << '\n';
+            report << "telemetry_stop_ok="
+                   << (telemetry_stop_ok ? 1 : 0) << '\n';
+            if (telemetry_stats.has_value()) {
+                const auto& telemetry = *telemetry_stats;
+                report << "telemetry_started="
+                       << (telemetry.started ? 1 : 0) << '\n';
+                report << "telemetry_stopped_cleanly="
+                       << (telemetry.stopped_cleanly ? 1 : 0) << '\n';
+                report << "telemetry_fatal_error="
+                       << (telemetry.fatal_error ? 1 : 0) << '\n';
+                report << "telemetry_last_error="
+                       << telemetry.last_error << '\n';
+                report << "telemetry_control_updates="
+                       << telemetry.control_updates << '\n';
+                report << "telemetry_runtime_updates="
+                       << telemetry.runtime_updates << '\n';
+                report << "telemetry_datagrams_attempted="
+                       << telemetry.datagrams_attempted << '\n';
+                report << "telemetry_datagrams_sent="
+                       << telemetry.datagrams_sent << '\n';
+                report << "telemetry_bytes_sent="
+                       << telemetry.bytes_sent << '\n';
+                report << "telemetry_send_failures="
+                       << telemetry.send_failures << '\n';
+                report << "telemetry_serialization_failures="
+                       << telemetry.serialization_failures << '\n';
+                report << "telemetry_oversized_datagrams="
+                       << telemetry.oversized_datagrams << '\n';
+                report << "telemetry_final_sequence="
+                       << telemetry.final_sequence << '\n';
+            }
+        }
 
         report << "captured_frames=" << stats.captured_frames << '\n';
         report << "camera_timeouts=" << stats.camera_timeouts << '\n';
@@ -1553,6 +1776,10 @@ int main(int argc, char** argv) {
 
         report << "video_frames_encoded="
                << stats.video_frames_encoded << '\n';
+        report << "video_frames_dropped="
+               << stats.video_frames_dropped << '\n';
+        report << "video_branch_failed="
+               << (stats.video_branch_failed ? 1 : 0) << '\n';
         report << "video_encode_failures="
                << stats.video_encode_failures << '\n';
         report << "video_packets_dropped="
@@ -1847,6 +2074,30 @@ int main(int argc, char** argv) {
 #endif
         report << "network_mux_ok=" << (network_mux_ok ? 1 : 0) << '\n';
 
+        bool telemetry_ok = true;
+        if (telemetry_enabled) {
+            telemetry_ok =
+                telemetry_start_ok && !telemetry_runtime_fault &&
+                telemetry_final_update_ok && telemetry_stop_ok &&
+                telemetry_stats.has_value() &&
+                telemetry_stats->started &&
+                telemetry_stats->stopped_cleanly &&
+                !telemetry_stats->running &&
+                !telemetry_stats->fatal_error &&
+                telemetry_stats->control_updates > 0U &&
+                telemetry_stats->control_updates <=
+                    state_stats.processed_packets &&
+                telemetry_stats->runtime_updates > 0U &&
+                telemetry_stats->datagrams_attempted > 0U &&
+                telemetry_stats->datagrams_attempted ==
+                    telemetry_stats->datagrams_sent &&
+                telemetry_stats->bytes_sent > 0U &&
+                telemetry_stats->send_failures == 0U &&
+                telemetry_stats->serialization_failures == 0U &&
+                telemetry_stats->oversized_datagrams == 0U;
+        }
+        report << "telemetry_ok=" << (telemetry_ok ? 1 : 0) << '\n';
+
         bool control_ok = false;
         if (options.control_backend == ControlBackend::MOCK) {
             control_ok =
@@ -1892,6 +2143,8 @@ int main(int argc, char** argv) {
             stats.postprocess_failures == 0U &&
             stats.result_publish_failures == 0U &&
             stats.video_encode_failures == 0U &&
+            !stats.video_branch_failed &&
+            stats.video_frames_dropped == 0U &&
             stats.video_packets_dropped == 0U &&
             stats.video_sink_failures == 0U &&
             stats.requeue_failures == 0U &&
@@ -1914,10 +2167,12 @@ int main(int argc, char** argv) {
             state_stats.perception_sink_failures == 0U &&
             state_stats.invalid_timestamp_packets == 0U &&
             control_ok &&
+            !auxiliary_media_runtime_fault &&
             audio_ok &&
             audio_encode_ok &&
             local_av_mux_ok &&
             network_mux_ok &&
+            telemetry_ok &&
             queues_ok && timing_ok && rss_ok;
 
         report << "vision_pipeline_r7_r8_probe="

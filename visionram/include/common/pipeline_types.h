@@ -279,6 +279,7 @@ struct PipelineStatsSnapshot {
     uint64_t dmabuf_sync_failures = 0;
 
     uint64_t video_frames_enqueued = 0;
+    uint64_t video_frames_dropped = 0;
     uint64_t video_frames_encoded = 0;
     uint64_t video_encode_failures = 0;
     uint64_t video_packets_enqueued = 0;
@@ -291,6 +292,7 @@ struct PipelineStatsSnapshot {
     uint64_t broker_outstanding_leases_before_camera_stop = 0;
 
     bool fatal_error = false;
+    bool video_branch_failed = false;
     bool graceful_shutdown_completed = false;
     bool split_final_completed_frame_drained = false;
 
@@ -303,6 +305,17 @@ struct PipelineStatsSnapshot {
     QueueStatsSnapshot video_frame_queue;
     QueueStatsSnapshot encoded_packet_queue;
     PipelineTimingSnapshot timing;
+};
+
+// Cheap live counters for V8.5 status publishing. Unlike stats(), reading
+// this snapshot never copies/sorts latency samples or touches frame buffers.
+struct PipelineRuntimeCounters {
+    std::uint64_t captured_frames = 0U;
+    std::uint64_t inference_successes = 0U;
+    std::uint64_t video_frames_encoded = 0U;
+    bool running = false;
+    bool fatal_error = false;
+    bool video_branch_failed = false;
 };
 
 }  // namespace visionarm

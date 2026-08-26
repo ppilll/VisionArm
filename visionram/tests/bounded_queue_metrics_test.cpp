@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 
@@ -32,6 +33,21 @@ int main() {
                 "replacement metric mismatch");
         Require(snapshot.high_watermark == 1U,
                 "high watermark mismatch");
+
+        visionarm::BoundedQueue<std::unique_ptr<int>> move_queue(1U);
+        std::optional<std::unique_ptr<int>> evicted_move;
+        Require(move_queue.PushLatest(
+                    std::make_unique<int>(7), &evicted_move),
+                "move-only first push failed");
+        Require(move_queue.PushLatest(
+                    std::make_unique<int>(8), &evicted_move),
+                "move-only replacement failed");
+        Require(evicted_move.has_value() && *evicted_move &&
+                    **evicted_move == 7,
+                "move-only eviction mismatch");
+        std::unique_ptr<int> latest;
+        Require(move_queue.WaitPop(&latest) && latest && *latest == 8,
+                "move-only latest mismatch");
         std::cout << "bounded_queue_metrics_test PASSED\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

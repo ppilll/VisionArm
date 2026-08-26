@@ -65,6 +65,7 @@ public:
     }
 
     [[nodiscard]] PipelineStatsSnapshot stats() const noexcept;
+    [[nodiscard]] PipelineRuntimeCounters runtime_counters() const noexcept;
 
 private:
     struct PendingInferenceFrame {
@@ -104,6 +105,7 @@ private:
         CompletedFrame* completed) noexcept;
 
     void SignalFailure() noexcept;
+    void SignalVideoFailure() noexcept;
     void DrainRequeueRequests() noexcept;
     void DrainRequeueRequestsUntilClosed() noexcept;
     void RequeueDirect(const CaptureFrameView& frame) noexcept;
@@ -138,6 +140,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_requested_{false};
     std::atomic<bool> fatal_error_{false};
+    std::atomic<bool> video_branch_failed_{false};
     bool started_once_ = false;
     std::atomic<bool> stop_completed_{false};
     std::atomic<bool> graceful_shutdown_completed_{false};
@@ -159,6 +162,7 @@ private:
     std::atomic<uint64_t> dmabuf_sync_failure_count_{0U};
 
     std::atomic<uint64_t> video_frames_enqueued_count_{0U};
+    std::atomic<uint64_t> video_frames_dropped_count_{0U};
     std::atomic<uint64_t> video_frames_encoded_count_{0U};
     std::atomic<uint64_t> video_encode_failure_count_{0U};
     std::atomic<uint64_t> video_packets_enqueued_count_{0U};
