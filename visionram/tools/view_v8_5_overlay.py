@@ -1,78 +1,229 @@
 #!/usr/bin/env python3
-"""Play V8.4 MPEG-TS A/V and draw V8.5 side telemetry on the PC."""
+"""Low-latency ffplay viewer plus independent telemetry JSON summary."""
 
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+from datetime import datetime, timezone
 import json
 import math
 import pathlib
+import shutil
 import signal
 import socket
+import subprocess
 import sys
 import threading
+import time
 from typing import Any
 
 from receive_v8_5_telemetry import validate_message
-from v8_5_overlay_core import OverlayMatch, TelemetryTimeline
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="V8.5 HEVC+AAC MPEG-TS player with display-only overlay")
-    parser.add_argument("--video-port", type=int, default=5000)
-    parser.add_argument("--telemetry-port", type=int, default=5001)
-    parser.add_argument("--bind", default="0.0.0.0", dest="bind_address")
-    parser.add_argument("--video-receive-buffer-bytes", type=int,
-                        default=4 * 1024 * 1024)
-    parser.add_argument("--telemetry-receive-buffer-bytes", type=int,
-                        default=1024 * 1024)
-    parser.add_argument("--timeline-capacity", type=int, default=512)
-    parser.add_argument("--result-stale-ms", type=float, default=300.0)
-    parser.add_argument("--telemetry-stale-ms", type=float, default=1000.0)
-    parser.add_argument(
-        "--video-pts-offset-ms", type=float, default=0.0,
-        help="constant added to decoded video PTS; leave 0 unless measured")
-    parser.add_argument("--telemetry-log", type=pathlib.Path)
-    args = parser.parse_args()
-    for port in (args.video_port, args.telemetry_port):
-        if not 1 <= port <= 65535:
-            parser.error("ports must be in [1, 65535]")
-    if args.video_port == args.telemetry_port:
-        parser.error("video and telemetry ports must differ")
-    if args.video_receive_buffer_bytes <= 0 or \
-            args.telemetry_receive_buffer_bytes <= 0 or \
-            args.timeline_capacity <= 0:
-        parser.error("buffer sizes and timeline capacity must be positive")
-    for value, name in (
-            (args.result_stale_ms, "result stale threshold"),
-            (args.telemetry_stale_ms, "telemetry stale threshold")):
-        if not math.isfinite(value) or value < 0.0:
-            parser.error(f"{name} must be finite and nonnegative")
-    if not math.isfinite(args.video_pts_offset_ms):
-        parser.error("video PTS offset must be finite")
-    return args
+class RunningStats:
+    def __init__(self) -> None:
+        self.count = 0
+        self.total = 0.0
+        self.minimum: float | None = None
+        self.maximum: float | None = None
+        self.last: float | None = None
+
+    def add(self, value: float) -> None:
+        converted = float(value)
+        self.count += 1
+        self.total += converted
+        self.minimum = converted if self.minimum is None else min(
+            self.minimum, converted)
+        self.maximum = converted if self.maximum is None else max(
+            self.maximum, converted)
+        self.last = converted
+
+    def snapshot(self) -> dict[str, float | int | None]:
+        return {
+            "samples": self.count,
+            "minimum": self.minimum,
+            "maximum": self.maximum,
+            "mean": None if self.count == 0 else self.total / self.count,
+            "last": self.last,
+        }
+
+
+class TelemetryAccumulator:
+    """Thread-safe wire-health and runtime-state aggregation."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._datagrams_received = 0
+        self._bytes_received = 0
+        self._valid_datagrams = 0
+        self._parse_errors = 0
+        self._schema_errors = 0
+        self._sequence_gaps = 0
+        self._out_of_order = 0
+        self._counter_regressions = 0
+        self._receiver_errors = 0
+        self._first_sequence: int | None = None
+        self._last_sequence: int | None = None
+        self._previous_sent_ns: int | None = None
+        self._previous_captured: int | None = None
+        self._first_arrival: float | None = None
+        self._last_arrival: float | None = None
+        self._camera_fps = RunningStats()
+        self._inference_fps = RunningStats()
+        self._capture_to_result_ms = RunningStats()
+        self._result_staleness_ms = RunningStats()
+        self._target_states: Counter[str] = Counter()
+        self._network_states: Counter[str] = Counter()
+        self._recording_states: Counter[str] = Counter()
+        self._latest: dict[str, Any] | None = None
+        self._last_error = ""
+
+    def add_payload(
+            self, payload: bytes,
+            arrival_monotonic: float | None = None) -> tuple[
+                dict[str, Any] | None, str | None]:
+        arrival = time.monotonic() if arrival_monotonic is None else \
+            float(arrival_monotonic)
+        with self._lock:
+            self._datagrams_received += 1
+            self._bytes_received += len(payload)
+        try:
+            text = payload.decode("utf-8")
+            decoded = json.loads(text)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            with self._lock:
+                self._parse_errors += 1
+                self._last_error = str(error)
+            return None, None
+        try:
+            message = validate_message(decoded)
+        except (ValueError, KeyError, TypeError) as error:
+            with self._lock:
+                self._schema_errors += 1
+                self._last_error = str(error)
+            return None, None
+
+        sequence = message["sequence"]
+        sent_ns = message["sent_monotonic_ns"]
+        captured = message["camera"]["captured_frames"]
+        with self._lock:
+            self._valid_datagrams += 1
+            if self._first_sequence is None:
+                self._first_sequence = sequence
+            if self._last_sequence is not None:
+                if sequence <= self._last_sequence:
+                    self._out_of_order += 1
+                elif sequence > self._last_sequence + 1:
+                    self._sequence_gaps += sequence - self._last_sequence - 1
+            if self._previous_sent_ns is not None and \
+                    sent_ns <= self._previous_sent_ns:
+                self._out_of_order += 1
+            if self._previous_captured is not None and \
+                    captured < self._previous_captured:
+                self._counter_regressions += 1
+
+            if self._last_sequence is None or sequence > self._last_sequence:
+                self._last_sequence = sequence
+                self._previous_sent_ns = sent_ns
+                self._previous_captured = captured
+                self._latest = message
+            self._first_arrival = arrival if self._first_arrival is None else \
+                self._first_arrival
+            self._last_arrival = arrival
+            self._camera_fps.add(message["camera"]["fps"])
+            self._inference_fps.add(message["inference"]["fps"])
+            self._capture_to_result_ms.add(
+                message["control"]["capture_to_result_ms"])
+            self._result_staleness_ms.add(
+                message["control"]["result_staleness_ms"])
+            self._target_states[message["target"]["state"]] += 1
+            self._network_states[message["network"]["state"]] += 1
+            self._recording_states[message["recording"]["state"]] += 1
+        return message, text
+
+    def set_receiver_error(self, error: BaseException) -> None:
+        with self._lock:
+            self._receiver_errors += 1
+            self._last_error = str(error)
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            duration = 0.0
+            if self._first_arrival is not None and \
+                    self._last_arrival is not None:
+                duration = max(
+                    0.0, self._last_arrival - self._first_arrival)
+            latest = None
+            if self._latest is not None:
+                message = self._latest
+                latest = {
+                    "sequence": message["sequence"],
+                    "sent_monotonic_ns": message["sent_monotonic_ns"],
+                    "pipeline": message["pipeline"],
+                    "camera": message["camera"],
+                    "inference": message["inference"],
+                    "video": message["video"],
+                    "network": message["network"],
+                    "recording": message["recording"],
+                    "target": message["target"],
+                    "control": message["control"],
+                }
+            wire_ok = (
+                self._valid_datagrams > 0 and self._parse_errors == 0 and
+                self._schema_errors == 0 and self._sequence_gaps == 0 and
+                self._out_of_order == 0 and
+                self._counter_regressions == 0 and
+                self._receiver_errors == 0)
+            return {
+                "datagrams_received": self._datagrams_received,
+                "bytes_received": self._bytes_received,
+                "valid_datagrams": self._valid_datagrams,
+                "parse_errors": self._parse_errors,
+                "schema_errors": self._schema_errors,
+                "first_sequence": self._first_sequence,
+                "last_sequence": self._last_sequence,
+                "sequence_gaps": self._sequence_gaps,
+                "out_of_order": self._out_of_order,
+                "counter_regressions": self._counter_regressions,
+                "receiver_errors": self._receiver_errors,
+                "observed_duration_seconds": duration,
+                "camera_fps": self._camera_fps.snapshot(),
+                "inference_fps": self._inference_fps.snapshot(),
+                "capture_to_result_ms":
+                    self._capture_to_result_ms.snapshot(),
+                "result_staleness_ms":
+                    self._result_staleness_ms.snapshot(),
+                "target_states": dict(sorted(self._target_states.items())),
+                "network_states": dict(
+                    sorted(self._network_states.items())),
+                "recording_states": dict(
+                    sorted(self._recording_states.items())),
+                "wire_validation": "PASS" if wire_ok else "FAIL",
+                "last_error": self._last_error,
+                "latest": latest,
+            }
 
 
 class TelemetryReceiver:
     def __init__(
-            self, timeline: TelemetryTimeline, bind_address: str, port: int,
-            receive_buffer_bytes: int,
-            log_path: pathlib.Path | None) -> None:
-        self._timeline = timeline
+            self, accumulator: TelemetryAccumulator, bind_address: str,
+            port: int, receive_buffer_bytes: int,
+            log_path: pathlib.Path | None, print_every: int) -> None:
+        self._accumulator = accumulator
         self._stop = threading.Event()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket.setsockopt(
             socket.SOL_SOCKET, socket.SO_RCVBUF, receive_buffer_bytes)
         self._socket.bind((bind_address, port))
         self._socket.settimeout(0.5)
+        self.actual_receive_buffer_bytes = self._socket.getsockopt(
+            socket.SOL_SOCKET, socket.SO_RCVBUF)
         self._log_path = log_path
+        self._print_every = print_every
         self._thread = threading.Thread(
-            target=self._run, name="v8.5-telemetry-receiver", daemon=True)
-        self._lock = threading.Lock()
-        self._received = 0
-        self._invalid = 0
-        self._last_error = ""
+            target=self._run, name="visionarm-telemetry-receiver",
+            daemon=True)
 
     def start(self) -> None:
         self._thread.start()
@@ -82,24 +233,12 @@ class TelemetryReceiver:
         self._thread.join(timeout=2.0)
         self._socket.close()
 
-    def summary(self) -> str:
-        with self._lock:
-            received = self._received
-            invalid = self._invalid
-            last_error = self._last_error
-        stats = self._timeline.stats()
-        return (
-            f"telemetry_received={received} telemetry_invalid={invalid} "
-            f"accepted={stats.accepted_datagrams} "
-            f"out_of_order={stats.rejected_out_of_order} "
-            f"sequence_gaps={stats.sequence_gaps} "
-            f"retained_results={stats.retained_results} "
-            f"last_error={last_error}")
-
     def _run(self) -> None:
         output = None
+        valid_count = 0
         try:
             if self._log_path is not None:
+                self._log_path.parent.mkdir(parents=True, exist_ok=True)
                 output = self._log_path.open(
                     "w", encoding="utf-8", newline="\n")
             while not self._stop.is_set():
@@ -107,353 +246,249 @@ class TelemetryReceiver:
                     payload, _peer = self._socket.recvfrom(65535)
                 except socket.timeout:
                     continue
-                try:
-                    text = payload.decode("utf-8")
-                    message = validate_message(json.loads(text))
-                    accepted = self._timeline.add(message)
-                    if accepted and output is not None:
-                        output.write(text.rstrip("\r\n") + "\n")
-                        output.flush()
-                    with self._lock:
-                        self._received += 1
-                except (UnicodeDecodeError, json.JSONDecodeError,
-                        ValueError, KeyError, TypeError) as error:
-                    with self._lock:
-                        self._invalid += 1
-                        self._last_error = str(error)
+                message, text = self._accumulator.add_payload(payload)
+                if message is None or text is None:
+                    continue
+                valid_count += 1
+                if output is not None:
+                    output.write(text.rstrip("\r\n") + "\n")
+                    output.flush()
+                if valid_count % self._print_every == 0:
+                    print(
+                        "telemetry"
+                        f" seq={message['sequence']}"
+                        f" camera_fps={message['camera']['fps']:.2f}"
+                        f" inference_fps={message['inference']['fps']:.2f}"
+                        f" target={message['target']['state']}"
+                        f" network={message['network']['state']}"
+                        f" recording={message['recording']['state']}",
+                        flush=True)
         except OSError as error:
             if not self._stop.is_set():
-                with self._lock:
-                    self._last_error = str(error)
+                self._accumulator.set_receiver_error(error)
         finally:
             if output is not None:
                 output.close()
 
 
-class OverlayRenderer:
-    def __init__(
-            self, timeline: TelemetryTimeline, gst: Any,
-            video_pts_offset_ms: float) -> None:
-        self._timeline = timeline
-        self._gst = gst
-        self._video_pts_offset_ms = video_pts_offset_ms
-        self._width = 1920
-        self._height = 1080
-
-    def on_caps_changed(self, _overlay: Any, caps: Any) -> None:
-        structure = caps.get_structure(0)
-        width = structure.get_value("width")
-        height = structure.get_value("height")
-        if isinstance(width, int) and width > 0:
-            self._width = width
-        if isinstance(height, int) and height > 0:
-            self._height = height
-
-    def on_draw(
-            self, _overlay: Any, context: Any, timestamp: int,
-            _duration: int) -> None:
-        pts_ms = None
-        if timestamp != self._gst.CLOCK_TIME_NONE:
-            pts_ms = timestamp / 1_000_000.0 + self._video_pts_offset_ms
-        match = self._timeline.match(pts_ms)
-        self._draw_status(context, match)
-        if match.bbox_visible:
-            self._draw_bbox(context, match)
-
-    @staticmethod
-    def _state_lines(match: OverlayMatch) -> list[str]:
-        runtime = match.runtime_message
-        if runtime is None:
-            return ["VISIONARM V8.5", "TELEMETRY: WAITING"]
-        camera = runtime["camera"]
-        inference = runtime["inference"]
-        network = runtime["network"]
-        recording = runtime["recording"]
-        lines = [
-            f"CAM {camera['fps']:.2f} FPS   NPU {inference['fps']:.2f} FPS",
-            f"NET {network['state']}   REC {recording['state']}",
-        ]
-        if match.result_message is None:
-            lines.append(f"TARGET --   ({match.reason})")
-        else:
-            target = match.result_message["target"]
-            control = match.result_message["control"]
-            lines.extend([
-                f"TARGET {target['state']}   conf={target['confidence']:.3f}",
-                f"CTRL dx={control['dx_px']:.1f} dy={control['dy_px']:.1f} "
-                f"C->R={control['capture_to_result_ms']:.1f} ms",
-                f"RESULT age={match.result_age_at_video_ms:.1f} ms   "
-                f"{match.reason}",
-            ])
-        telemetry_age = "--" if match.telemetry_age_ms is None else \
-            f"{match.telemetry_age_ms:.0f} ms"
-        health = "STALE" if match.telemetry_stale else "LIVE"
-        lines.append(
-            f"TELEMETRY {health} age={telemetry_age} "
-            f"seq={runtime['sequence']}")
-        return lines
-
-    def _draw_status(self, context: Any, match: OverlayMatch) -> None:
-        lines = self._state_lines(match)
-        line_height = 25.0
-        box_width = min(660.0, max(420.0, self._width * 0.42))
-        box_height = 18.0 + line_height * len(lines)
-        context.save()
-        context.set_source_rgba(0.0, 0.0, 0.0, 0.67)
-        context.rectangle(12.0, 12.0, box_width, box_height)
-        context.fill()
-        context.select_font_face("Sans", 0, 0)
-        context.set_font_size(18.0)
-        if match.telemetry_stale:
-            context.set_source_rgba(1.0, 0.25, 0.2, 1.0)
-        else:
-            context.set_source_rgba(0.2, 1.0, 0.35, 1.0)
-        for index, line in enumerate(lines):
-            if index > 0:
-                context.set_source_rgba(1.0, 1.0, 1.0, 1.0)
-            context.move_to(24.0, 39.0 + line_height * index)
-            context.show_text(line)
-        context.restore()
-
-    def _draw_bbox(self, context: Any, match: OverlayMatch) -> None:
-        assert match.result_message is not None
-        target = match.result_message["target"]
-        source_width = float(target["source_width"])
-        source_height = float(target["source_height"])
-        x1, y1, x2, y2 = [float(value) for value in target["bbox"]]
-        scale_x = self._width / source_width
-        scale_y = self._height / source_height
-        x = max(0.0, min(self._width, x1 * scale_x))
-        y = max(0.0, min(self._height, y1 * scale_y))
-        right = max(0.0, min(self._width, x2 * scale_x))
-        bottom = max(0.0, min(self._height, y2 * scale_y))
-        if right <= x or bottom <= y:
-            return
-        context.save()
-        context.set_source_rgba(0.1, 1.0, 0.2, 0.95)
-        context.set_line_width(max(2.0, self._width / 640.0))
-        context.rectangle(x, y, right - x, bottom - y)
-        context.stroke()
-        context.set_font_size(18.0)
-        context.move_to(x + 3.0, max(20.0, y - 5.0))
-        context.show_text(
-            f"football {target['confidence']:.3f}")
-        context.restore()
+def build_video_url(args: argparse.Namespace) -> str:
+    return (
+        f"udp://{args.bind_address}:{args.video_port}"
+        f"?fifo_size={args.ffplay_fifo_size}"
+        "&overrun_nonfatal=0"
+        f"&buffer_size={args.video_receive_buffer_bytes}")
 
 
-def make_element(gst: Any, factory: str, name: str) -> Any:
-    element = gst.ElementFactory.make(factory, name)
-    if element is None:
-        raise RuntimeError(
-            f"missing GStreamer element '{factory}' (required by {name})")
-    return element
-
-
-def link_chain(elements: list[Any]) -> None:
-    for upstream, downstream in zip(elements, elements[1:]):
-        if not upstream.link(downstream):
-            raise RuntimeError(
-                f"failed to link {upstream.get_name()} -> "
-                f"{downstream.get_name()}")
-
-
-def build_pipeline(args: argparse.Namespace, timeline: TelemetryTimeline,
-                   gst: Any) -> tuple[Any, OverlayRenderer]:
-    pipeline = gst.Pipeline.new("visionarm-v8-5-overlay")
-    if pipeline is None:
-        raise RuntimeError("failed to create GStreamer pipeline")
-    source = make_element(gst, "udpsrc", "mpegts-udp-source")
-    demux = make_element(gst, "tsdemux", "mpegts-demux")
-    video_queue = make_element(gst, "queue", "video-queue")
-    video_decoder = make_element(gst, "decodebin", "video-decoder")
-    video_convert = make_element(
-        gst, "videoconvert", "overlay-input-convert")
-    overlay_caps = make_element(
-        gst, "capsfilter", "overlay-input-caps")
-    overlay = make_element(gst, "cairooverlay", "telemetry-overlay")
-    video_output_convert = make_element(
-        gst, "videoconvert", "video-output-convert")
-    video_sink = make_element(gst, "autovideosink", "video-output")
-    audio_queue = make_element(gst, "queue", "audio-queue")
-    audio_decoder = make_element(gst, "decodebin", "audio-decoder")
-    audio_convert = make_element(gst, "audioconvert", "audio-convert")
-    audio_resample = make_element(gst, "audioresample", "audio-resample")
-    audio_sink = make_element(gst, "autoaudiosink", "audio-output")
-
-    source.set_property("address", args.bind_address)
-    source.set_property("port", args.video_port)
-    source.set_property("buffer-size", args.video_receive_buffer_bytes)
-    source.set_property("caps", gst.Caps.from_string(
-        "video/mpegts,systemstream=(boolean)true,packetsize=(int)188"))
-    # cairooverlay accepts only a small set of RGB raw formats. Make both
-    # conversion boundaries explicit: decoded I420/NV12 -> BGRA for Cairo,
-    # then BGRA -> whatever the selected platform video sink accepts.
-    overlay_caps.set_property("caps", gst.Caps.from_string(
-        "video/x-raw,format=(string)BGRA"))
-    video_sink.set_property("sync", True)
-    audio_sink.set_property("sync", True)
-    video_queue.set_property("max-size-time", 2 * gst.SECOND)
-    audio_queue.set_property("max-size-time", 2 * gst.SECOND)
-
-    elements = [
-        source, demux, video_queue, video_decoder, video_convert, overlay_caps,
-        overlay, video_output_convert, video_sink, audio_queue, audio_decoder,
-        audio_convert, audio_resample, audio_sink,
+def build_ffplay_command(
+        args: argparse.Namespace, ffplay_executable: str) -> list[str]:
+    return [
+        ffplay_executable,
+        "-hide_banner",
+        "-fflags", "nobuffer",
+        "-flags", "low_delay",
+        "-framedrop",
+        "-probesize", str(args.probesize),
+        "-analyzeduration", str(args.analyzeduration),
+        "-window_title", "VisionArm live A/V",
+        build_video_url(args),
     ]
-    for element in elements:
-        pipeline.add(element)
-    if not source.link(demux):
-        raise RuntimeError("failed to link UDP source to MPEG-TS demuxer")
-    link_chain([video_queue, video_decoder])
-    link_chain([
-        video_convert, overlay_caps, overlay, video_output_convert,
-        video_sink])
-    link_chain([audio_queue, audio_decoder])
-    link_chain([audio_convert, audio_resample, audio_sink])
 
-    def on_decoded_pad(
-            decoder: Any, pad: Any, expected_caps_name: str,
-            target: Any) -> None:
-        caps = pad.get_current_caps() or pad.query_caps(None)
-        caps_name = caps.get_structure(0).get_name() if caps and \
-            caps.get_size() > 0 else ""
-        if caps_name != expected_caps_name:
-            print(
-                f"ignoring unexpected {decoder.get_name()} output: "
-                f"{caps.to_string() if caps else 'unknown caps'}",
-                file=sys.stderr, flush=True)
-            return
-        if target.is_linked():
-            print(
-                f"ignoring additional {decoder.get_name()} output: "
-                f"{caps.to_string()}", file=sys.stderr, flush=True)
-            return
-        if expected_caps_name == "video/x-raw":
-            # A normal raw-video link recursively compares I420 with
-            # cairooverlay through videoconvert and can reject a convertible
-            # format as NOFORMAT. Validate hierarchy here; videoconvert + the
-            # explicit BGRA filter negotiate when the CAPS event arrives.
-            result = pad.link_full(target, gst.PadLinkCheck.HIERARCHY)
-        else:
-            # The audio path already negotiates successfully with the normal
-            # caps check; keep that stricter behavior unchanged.
-            result = pad.link(target)
-        if result != gst.PadLinkReturn.OK:
-            print(
-                f"failed decoded link for {caps.to_string()}: {result}",
-                file=sys.stderr, flush=True)
-        else:
-            print(
-                f"linked decoded {caps_name}: {caps.to_string()}",
-                flush=True)
 
-    video_decoder.connect(
-        "pad-added", on_decoded_pad, "video/x-raw",
-        video_convert.get_static_pad("sink"))
-    audio_decoder.connect(
-        "pad-added", on_decoded_pad, "audio/x-raw",
-        audio_convert.get_static_pad("sink"))
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=("Low-latency ffplay UDP/5000 viewer with independent "
+                     "UDP/5001 telemetry summary"))
+    parser.add_argument("--video-port", type=int, default=5000)
+    parser.add_argument("--telemetry-port", type=int, default=5001)
+    parser.add_argument("--bind", default="0.0.0.0", dest="bind_address")
+    parser.add_argument("--video-receive-buffer-bytes", type=int,
+                        default=4 * 1024 * 1024)
+    parser.add_argument("--telemetry-receive-buffer-bytes", type=int,
+                        default=1024 * 1024)
+    parser.add_argument("--ffplay-fifo-size", type=int, default=65536)
+    parser.add_argument("--probesize", type=int, default=5_000_000)
+    parser.add_argument("--analyzeduration", type=int, default=5_000_000)
+    parser.add_argument("--ffplay", default="ffplay",
+                        help="ffplay executable or absolute path")
+    parser.add_argument("--duration-seconds", type=float, default=0.0,
+                        help="0 runs until the ffplay window closes")
+    parser.add_argument("--telemetry-print-every", type=int, default=10)
+    parser.add_argument("--telemetry-log", type=pathlib.Path)
+    parser.add_argument("--summary-json", type=pathlib.Path,
+                        default=pathlib.Path("v8_6_view_summary.json"))
 
-    def on_pad_added(_demux: Any, pad: Any) -> None:
-        caps = pad.get_current_caps() or pad.query_caps(None)
-        caps_name = caps.get_structure(0).get_name() if caps and \
-            caps.get_size() > 0 else ""
-        target = None
-        if caps_name == "video/x-h265":
-            target = video_queue.get_static_pad("sink")
-        elif caps_name == "audio/mpeg":
-            target = audio_queue.get_static_pad("sink")
-        if target is not None and not target.is_linked():
-            # Each queue now terminates at a decodebin ANY sink pad, so normal
-            # caps-checked linking is valid for tsdemux's initial encoded caps.
-            result = pad.link(target)
-            if result != gst.PadLinkReturn.OK:
-                print(
-                    f"failed dynamic link for {caps.to_string()}: {result}",
-                    file=sys.stderr, flush=True)
-            else:
-                print(
-                    f"linked {caps_name} demux pad: {caps.to_string()}",
-                    flush=True)
+    # Retain the former CLI so existing commands do not fail. Rendering is
+    # deliberately removed: all three values now select the same ffplay path.
+    parser.add_argument(
+        "--overlay-mode", choices=("off", "status", "bbox"), default="off",
+        help="compatibility option; overlays are disabled in lightweight mode")
+    parser.add_argument("--timeline-capacity", type=int, default=512,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--result-stale-ms", type=float, default=300.0,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--telemetry-stale-ms", type=float, default=1000.0,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--video-pts-offset-ms", type=float, default=0.0,
+                        help=argparse.SUPPRESS)
+    args = parser.parse_args()
 
-    demux.connect("pad-added", on_pad_added)
-    renderer = OverlayRenderer(timeline, gst, args.video_pts_offset_ms)
-    overlay.connect("caps-changed", renderer.on_caps_changed)
-    overlay.connect("draw", renderer.on_draw)
-    return pipeline, renderer
+    for port in (args.video_port, args.telemetry_port):
+        if not 1 <= port <= 65535:
+            parser.error("ports must be in [1, 65535]")
+    if args.video_port == args.telemetry_port:
+        parser.error("video and telemetry ports must differ")
+    for value, name in (
+            (args.video_receive_buffer_bytes, "video receive buffer"),
+            (args.telemetry_receive_buffer_bytes,
+             "telemetry receive buffer"),
+            (args.ffplay_fifo_size, "ffplay FIFO size"),
+            (args.probesize, "probesize"),
+            (args.analyzeduration, "analyzeduration"),
+            (args.telemetry_print_every, "telemetry print interval")):
+        if value <= 0:
+            parser.error(f"{name} must be positive")
+    if not math.isfinite(args.duration_seconds) or \
+            args.duration_seconds < 0.0:
+        parser.error("duration must be finite and nonnegative")
+    return args
+
+
+def _resolve_ffplay(value: str) -> str | None:
+    path = pathlib.Path(value)
+    if path.parent != pathlib.Path("."):
+        return str(path) if path.is_file() else None
+    return shutil.which(value)
+
+
+def _terminate_process(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=3.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=3.0)
 
 
 def main() -> int:
     args = parse_args()
-    try:
-        import gi
-        gi.require_version("Gst", "1.0")
-        from gi.repository import GLib, Gst
-        import cairo  # noqa: F401  # required by cairooverlay bindings
-    except (ImportError, ValueError) as error:
+    ffplay = _resolve_ffplay(args.ffplay)
+    if ffplay is None:
         print(
-            "PyGObject/GStreamer/Cairo is unavailable; install the packages "
-            "listed in README.md\n" + str(error), file=sys.stderr)
+            f"ffplay not found: {args.ffplay}; install FFmpeg or pass "
+            "--ffplay /absolute/path/to/ffplay", file=sys.stderr)
         return 2
+    if args.overlay_mode != "off":
+        print(
+            f"overlay_mode={args.overlay_mode} requested, but on-screen "
+            "overlay is disabled; using the low-latency ffplay path",
+            file=sys.stderr, flush=True)
 
-    Gst.init(None)
-    timeline = TelemetryTimeline(
-        capacity=args.timeline_capacity,
-        result_stale_ms=args.result_stale_ms,
-        telemetry_stale_ms=args.telemetry_stale_ms)
+    accumulator = TelemetryAccumulator()
     try:
         receiver = TelemetryReceiver(
-            timeline, args.bind_address, args.telemetry_port,
-            args.telemetry_receive_buffer_bytes, args.telemetry_log)
-        pipeline, _renderer = build_pipeline(args, timeline, Gst)
-    except (OSError, RuntimeError, ValueError) as error:
-        print(f"startup failed: {error}", file=sys.stderr)
+            accumulator, args.bind_address, args.telemetry_port,
+            args.telemetry_receive_buffer_bytes, args.telemetry_log,
+            args.telemetry_print_every)
+    except OSError as error:
+        print(f"telemetry startup failed: {error}", file=sys.stderr)
         return 2
 
-    loop = GLib.MainLoop()
-    exit_code = 0
+    video_url = build_video_url(args)
+    command = build_ffplay_command(args, ffplay)
+    stop_requested = threading.Event()
+    stop_reason = "ffplay_exit"
 
-    def on_bus_message(_bus: Any, message: Any) -> None:
-        nonlocal exit_code
-        if message.type == Gst.MessageType.ERROR:
-            error, debug = message.parse_error()
-            print(f"GStreamer error: {error}", file=sys.stderr)
-            if debug:
-                print(debug, file=sys.stderr)
-            exit_code = 1
-            loop.quit()
-        elif message.type == Gst.MessageType.EOS:
-            loop.quit()
+    def request_stop(_signum: int, _frame: Any) -> None:
+        stop_requested.set()
 
-    bus = pipeline.get_bus()
-    bus.add_signal_watch()
-    bus.connect("message", on_bus_message)
-
-    def request_stop(*_unused: Any) -> bool:
-        loop.quit()
-        return False
-
-    signal.signal(signal.SIGINT, lambda *_unused: GLib.idle_add(request_stop))
-    signal.signal(signal.SIGTERM, lambda *_unused: GLib.idle_add(request_stop))
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
     receiver.start()
+    started_monotonic = time.monotonic()
+    started_utc = datetime.now(timezone.utc).isoformat()
+    print(f"video={video_url}", flush=True)
     print(
-        f"video=udp://{args.bind_address}:{args.video_port} "
         f"telemetry=udp://{args.bind_address}:{args.telemetry_port}",
         flush=True)
-    state_result = pipeline.set_state(Gst.State.PLAYING)
-    if state_result == Gst.StateChangeReturn.FAILURE:
-        print("failed to set GStreamer pipeline to PLAYING", file=sys.stderr)
-        exit_code = 1
-    else:
-        try:
-            loop.run()
-        except KeyboardInterrupt:
-            pass
-    pipeline.set_state(Gst.State.NULL)
-    bus.remove_signal_watch()
-    receiver.stop()
-    print(receiver.summary(), flush=True)
-    return exit_code
+    print(f"summary_json={args.summary_json}", flush=True)
+    try:
+        # Keep terminal Ctrl-C under the Python supervisor's control; it then
+        # terminates ffplay and always has a chance to finalize summary JSON.
+        process = subprocess.Popen(command, start_new_session=True)
+    except OSError as error:
+        receiver.stop()
+        print(f"failed to start ffplay: {error}", file=sys.stderr)
+        return 2
+
+    try:
+        while process.poll() is None:
+            if stop_requested.wait(timeout=0.2):
+                stop_reason = "signal"
+                break
+            if args.duration_seconds > 0.0 and \
+                    time.monotonic() - started_monotonic >= \
+                    args.duration_seconds:
+                stop_reason = "duration"
+                break
+    finally:
+        _terminate_process(process)
+        receiver.stop()
+    if stop_requested.is_set():
+        stop_reason = "signal"
+
+    ended_monotonic = time.monotonic()
+    telemetry = accumulator.snapshot()
+    telemetry["bind_address"] = args.bind_address
+    telemetry["port"] = args.telemetry_port
+    telemetry["requested_receive_buffer_bytes"] = \
+        args.telemetry_receive_buffer_bytes
+    telemetry["actual_receive_buffer_bytes"] = \
+        receiver.actual_receive_buffer_bytes
+    telemetry["raw_log"] = None if args.telemetry_log is None else \
+        str(args.telemetry_log)
+    summary = {
+        "schema": "visionarm.viewer_summary.v1",
+        "started_utc": started_utc,
+        "ended_utc": datetime.now(timezone.utc).isoformat(),
+        "observed_duration_seconds": max(
+            0.0, ended_monotonic - started_monotonic),
+        "stop_reason": stop_reason,
+        "video": {
+            "backend": "ffplay",
+            "url": video_url,
+            "low_latency": True,
+            "framedrop": True,
+            "probesize": args.probesize,
+            "analyzeduration": args.analyzeduration,
+            "exit_code": process.returncode,
+            "overlay": "disabled",
+        },
+        "telemetry": telemetry,
+    }
+    try:
+        args.summary_json.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_json.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
+    except OSError as error:
+        print(f"failed to write summary JSON: {error}", file=sys.stderr)
+        return 1
+
+    print(
+        f"telemetry_valid={telemetry['valid_datagrams']} "
+        f"parse_errors={telemetry['parse_errors']} "
+        f"schema_errors={telemetry['schema_errors']} "
+        f"sequence_gaps={telemetry['sequence_gaps']} "
+        f"receiver_errors={telemetry['receiver_errors']} "
+        f"wire_validation={telemetry['wire_validation']}", flush=True)
+    print(f"summary={args.summary_json}", flush=True)
+    if telemetry["valid_datagrams"] == 0:
+        return 1
+    if stop_reason == "ffplay_exit" and process.returncode not in (0, None):
+        return int(process.returncode)
+    return 0
 
 
 if __name__ == "__main__":

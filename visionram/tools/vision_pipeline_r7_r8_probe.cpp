@@ -1323,7 +1323,8 @@ int main(int argc, char** argv) {
 
         RssSamples rss;
         rss.Add(ReadVmRssKb());
-        const auto deadline = std::chrono::steady_clock::now() +
+        const auto run_start = std::chrono::steady_clock::now();
+        const auto deadline = run_start +
             std::chrono::seconds(options.duration_seconds);
         auto next_rss_sample = std::chrono::steady_clock::now() +
             std::chrono::seconds(1);
@@ -1385,6 +1386,13 @@ int main(int argc, char** argv) {
                 next_rss_sample += std::chrono::seconds(1);
             }
         }
+        const auto run_end = std::chrono::steady_clock::now();
+        const bool completed_requested_duration = run_end >= deadline;
+        const bool terminated_by_signal =
+            !completed_requested_duration &&
+            g_stop.load(std::memory_order_acquire);
+        const double observed_duration_seconds =
+            std::chrono::duration<double>(run_end - run_start).count();
         pipeline.Stop();
 #if defined(VISIONARM_HAS_ALSA_AUDIO)
         std::optional<visionarm::AudioCaptureWorkerSnapshot> audio_worker_stats;
@@ -1497,6 +1505,14 @@ int main(int argc, char** argv) {
         report << "camera_isp_height=" << camera_format.height << '\n';
         report << "media_epoch_monotonic_ns="
                << media_clock_stats.media_epoch_monotonic_ns << '\n';
+        report << "requested_duration_seconds="
+               << options.duration_seconds << '\n';
+        report << "observed_duration_seconds="
+               << observed_duration_seconds << '\n';
+        report << "completed_requested_duration="
+               << (completed_requested_duration ? 1 : 0) << '\n';
+        report << "terminated_by_signal="
+               << (terminated_by_signal ? 1 : 0) << '\n';
         report << "auxiliary_media_runtime_fault="
                << (auxiliary_media_runtime_fault ? 1 : 0) << '\n';
 #if defined(VISIONARM_HAS_ALSA_AUDIO)
@@ -1795,6 +1811,10 @@ int main(int argc, char** argv) {
                << stats.broker_outstanding_frames_before_camera_stop << '\n';
         report << "broker_outstanding_leases_before_camera_stop="
                << stats.broker_outstanding_leases_before_camera_stop << '\n';
+        report << "broker_outstanding_frames_after_stop="
+               << broker_stats.outstanding_frames << '\n';
+        report << "broker_outstanding_leases_after_stop="
+               << broker_stats.outstanding_leases << '\n';
         report << "fatal_error=" << (stats.fatal_error ? 1 : 0) << '\n';
         report << "graceful_shutdown_completed="
                << (stats.graceful_shutdown_completed ? 1 : 0) << '\n';
@@ -2134,6 +2154,8 @@ int main(int argc, char** argv) {
 #endif
 
         const bool passed =
+            completed_requested_duration &&
+            !terminated_by_signal &&
             stats.captured_frames > 0U &&
             stats.video_frames_encoded > 0U &&
             stats.inference_successes > 0U &&

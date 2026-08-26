@@ -970,8 +970,20 @@ if(VISIONARM_BUILD_TESTS)
             COMMAND
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/v8_5_overlay_core_test.py)
+        add_test(
+            NAME v8_6_integration_report_test
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/v8_6_integration_report_test.py)
+        add_test(
+            NAME v8_6_lightweight_viewer_test
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/v8_6_lightweight_viewer_test.py)
         set_tests_properties(
             v8_5_overlay_core_test
+            v8_6_integration_report_test
+            v8_6_lightweight_viewer_test
             PROPERTIES TIMEOUT 15)
     endif()
 

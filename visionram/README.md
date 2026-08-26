@@ -1,163 +1,135 @@
-# VisionArm BallTrack V8.5 最终轮：独立 Telemetry 与 PC Overlay
+# VisionArm BallTrack V8.6 第一轮：轻量接收与 10 分钟完整集成验收
 
-V8.4 已通过真实板端、本地回传和网络对端验收并冻结：本地 MP4、HEVC+AAC MPEG-TS/UDP、TS continuity、完整解码均正常，无花屏或撕裂。本轮不修改 HEVC/AAC 编码参数、MPEG-TS 时间戳修复、MediaClock 或 MP4 封装语义。
+本轮在已经实机通过的 V8.4、V8.5 基础上做两件事：
 
-V8.5 本轮完成以下内容：
+1. PC Viewer 使用已经实测正常的 FFmpeg/ffplay 低延迟路径播放 UDP/5000，Python 独立汇总 UDP/5001。
+2. 开始 V8.6 Full Integration，把“完整运行 10 分钟、资源全部归还、所有分支正常结束”变成机器可检查的报告契约。
 
-- Telemetry 从同步 control sink 链彻底移出，由 supervisor 采样 `LatestResultStore`。
-- Camera→Inference 与 Camera→Video 分发不再因 video FIFO 满而互相等待。
-- Video 编码/文件/Mux/UDP 分支失败时只关闭媒体分支，Inference 继续运行；故障仍令最终报告 FAIL。
-- Telemetry 启动或运行失败不会提前停止 Camera/Inference/媒体主循环。
-- PC 端同时播放 HEVC+AAC MPEG-TS，并按 media PTS 绘制 Camera FPS、检测框、控制/延迟、Network、Recording 状态。
-- Overlay timeline 有界、拒绝乱序结果、绝不把未来推理结果画到更早的视频帧，并隐藏过期框。
+本轮代码完成不代表 V8.6 已通过。RK3588、Camera、RKNN、MPP、ALSA、FFmpeg、网络、存储和 STM32/UART 的 600 秒实机组合测试仍必须由真实环境完成；V8.6 第二轮将依据第一轮实测结果收口。
 
-代码完成不等于实机 PASS。只有本文最后的板端、PC、故障隔离和稳定性验收均通过后，才能冻结 V8.5。
+## 0. 应用本轮 patch
 
-## 1. 完整架构与数据流
-
-```text
-                                  RK3588 board
-
-                         Camera owner / V4L2 DQBUF
-                                    │
-                       CaptureBufferBroker::Publish
-                         ┌──────────┴──────────┐
-                 inference FrameLease     video FrameLease
-                         │                       │
-             latest-frame queue, cap=1    video FIFO, bounded
-                 replace old, no history  PushLatest, never waits
-                         │                       │
-                  RGA → RKNN → postprocess      MPP HEVC
-                         │                       │ release lease
-                TargetStateMachine              ▼
-                  ┌──────┴──────┐       owning encoded packets
-                  │             │               │
-          mock/UART control  LatestResultStore  ├─ raw H.265 file
-                                                ├─ MP4 mux
-                                                └─ MPEG-TS sink queue
-                                                        │
-                                               UDP worker / port 5000
-
-                  supervisor thread, 100 ms sampling only
-                  ┌───────────────────────────────────────┐
-                  │ LatestResultStore copy                │
-                  │ cheap atomic pipeline counters        │
-                  │ MP4/network snapshot counters         │
-                  └──────────────────┬────────────────────┘
-                                     ▼
-                         latest telemetry mailbox
-                                     │
-                         JSON serializer + UDP worker
-                              UDP / port 5001
-
-                                      PC
-                  ┌────────────────────┴────────────────────┐
-             GStreamer MPEG-TS path                  telemetry thread
-        tsdemux → HEVC decode → cairooverlay      bounded result timeline
-        tsdemux → AAC decode  → audio output             │
-                  └────────────────────┬───────────────────┘
-                                  display only
-```
-
-### 1.1 Camera ownership 与两条分支
-
-Camera buffer 仍只由 `CaptureBufferBroker + FrameLease` 管理。一次 DQBUF 为 Inference 和 Video 创建两个独立 lease；最后一个 lease release 后，只有 Camera owner 才执行 QBUF。任何 Mux、UDP、Telemetry 或 PC Overlay 都看不到 DMA-BUF，也不能延长 Camera buffer 生命周期。
-
-Inference 分支使用 capacity=1 的 latest-frame queue。输入 slot 忙时只替换等待中的旧推理帧，不处理历史积压。
-
-Video 分支使用有界 FIFO，但 Capture 现在使用非阻塞 `PushLatest()`：
-
-- FIFO 有空间：移交 video lease 给 MPP。
-- FIFO 已满：保留最新 video lease，立即 release 被替换的旧 lease，并增加 `video_frames_dropped`。
-- 媒体分支已关闭：立即 release 新 video lease，增加 `video_frames_dropped`，Camera/Inference 继续。
-- 正常验收要求 `video_frames_dropped=0`；非零不是静默成功，而是明确 FAIL。
-
-这保证媒体过载不会让 Camera owner 等待 video FIFO，从软件队列层面切断 Video→Inference 的反压路径。Camera、RGA、MPP、RKNN 仍共享 SoC 内存带宽等物理资源，性能验收仍必须看实机 FPS/latency；“独立”不表示硬件资源凭空隔离。
-
-### 1.2 推理、控制与 Telemetry
-
-正式推理路径只有：
-
-```text
-postprocess → TargetStateMachine → primary control sink (mock 或 UART)
-                                 → LatestResultStore
-```
-
-`UdpTelemetrySink` 不再继承 `IControlSink`，也不在 `TargetStateMachine` 的同步 fanout 中。Supervisor 每 100 ms 读取一份已完成的 latest result 和少量 atomic counter，再调用 `UpdateControl()/UpdateRuntime()` 覆盖 latest mailbox。更新函数不做 DNS、JSON 序列化或 socket I/O。
-
-Telemetry worker 才负责固定频率 JSON/UDP 发送。Telemetry 启动、序列化或 `sendto()` 失败会锁存 `telemetry_runtime_fault=1`，最终 `telemetry_ok=0`，但不会改变 control result，也不会提前停止 Inference。
-
-因此 `telemetry_control_updates` 是 supervisor 采样到的不同结果数，不再等于 state machine 处理数，正确关系为：
-
-```text
-0 < telemetry_control_updates <= state_processed_packets
-```
-
-### 1.3 Video/Audio、Mux 与 UDP
-
-MPP 消费输入后立即 release Camera lease，后续对象只拥有自己的 HEVC bytes。Audio 仍使用既有 ALSA→MediaClock→AAC 路径。MPEG-TS/UDP sink 的 `Write()/WriteAudio()` 只把 owning HEVC/AAC packet 放进它自己的 bounded queue；libavformat 和 UDP socket 只由网络 worker 操作。
-
-UDP/5000 从不读取、轮询或等待 `LatestResultStore`，也不把 detection JSON 塞进 MPEG-TS。编码 access unit 的 PTS 只来自 V4L2 capture monotonic timestamp 与共同 media epoch，不来自 inference 完成时间。
-
-若编码、文件或网络 sink 失败，`SignalVideoFailure()` 只停止 video/encoded queues；Capture 随后立即释放新的 video lease，Inference 仍可继续产生结果。Audio/Mux/Network 故障同样只锁存 `auxiliary_media_runtime_fault=1`，主循环运行到设定 duration 或用户信号。最终报告仍会 FAIL，防止把残缺媒体误判为成功。
-
-### 1.4 PC Overlay 与 PTS 匹配
-
-Overlay 完全位于 PC：GStreamer 解码 MPEG-TS 中的 HEVC/AAC，`cairooverlay` 只修改显示帧，不回传命令、不修改板端 H.265、不二次编码。
-
-Telemetry 中的：
-
-```text
-capture_media_pts_ms = capture_monotonic_ns - media_epoch_monotonic_ns
-```
-
-与视频 packet 使用同一 media epoch。每个 decoded video buffer 到来时，PC 从有界 timeline 选择 `capture_media_pts_ms <= video_pts_ms` 的最新结果：
-
-- 默认不容许未来结果，绝不会把较新检测画到较早画面。
-- 同一个 inference frame 的周期性重复 datagram 只保存一次。
-- timeline 默认最多 512 个不同结果，满后淘汰最旧结果。
-- 结果相对视频超过 300 ms，或发送端报告 `result_staleness_ms>300`：隐藏 bbox，显示 `RESULT_STALE`。
-- 1 s 未收到 telemetry：隐藏 bbox，显示红色 `TELEMETRY STALE`，视频和音频继续。
-- 只有 `DETECTED + target.valid + control.valid` 才绘制 bbox。
-
-默认 `--video-pts-offset-ms 0`。不要凭观察随意修改；只有用抓取的 TS/telemetry 证明接收栈存在固定 PTS 偏移后，才传入测得的常数。
-
-## 2. 本轮文件
-
-板端与协议：
-
-- `include/common/pipeline_types.h`
-- `include/pipeline/inference_pipeline.h`
-- `src/pipeline/inference_pipeline.cpp`
-- `include/telemetry/udp_telemetry_sink.h`
-- `src/telemetry/udp_telemetry_sink.cpp`
-- `tools/vision_pipeline_r7_r8_probe.cpp`
-- `tests/udp_telemetry_sink_test.cpp`
-- `tests/bounded_queue_metrics_test.cpp`
-- `CMakeLists.txt`
-
-PC 工具：
-
-- `tools/receive_v8_5_telemetry.py`
-- `tools/v8_5_overlay_core.py`
-- `tools/view_v8_5_overlay.py`
-- `tests/v8_5_overlay_core_test.py`
-
-## 3. 应用第二轮 patch
-
-实际仓库必须已经处于 V8.5 第一轮代码状态，然后在仓库根目录执行：
+实际仓库应已应用 `V8.6-round1.patch`。本次 Viewer 修复是其增量 patch，在真实仓库根目录执行：
 
 ```sh
-git apply --check V8.5-round2.patch
-git apply V8.5-round2.patch
+git apply --check V8.6-round1-viewer-hotfix.patch
+git apply V8.6-round1-viewer-hotfix.patch
 ```
 
-## 4. 板端构建与自动测试
+如果第一条命令失败，不要强制应用；先确认实际仓库已经完整应用上一份 V8.6 第一轮 patch，并且没有与 Viewer、README 或 CMake 测试清单重叠的本地修改。
 
-沿用已通过 V8.4/V8.5 第一轮的真实 toolchain、sysroot 和库路径：
+## 1. 为什么截图中没有检测框
+
+旧 Overlay 截图中的关键信息是：
+
+```text
+TARGET DETECTED conf=0.920
+RESULT age=13906.0 ms RESULT_STALE
+TELEMETRY LIVE age=71 ms
+```
+
+`TARGET DETECTED` 说明检测成功。没有框是因为旧 GStreamer Viewer 中正在显示的视频已经落后约 13.9 秒，远超原来的 300 ms bbox 时效阈值，因此旧实现主动隐藏了框。
+
+三份实测 Telemetry JSONL 均为连续 `301/301` datagram，Camera 平均约 `28.95–28.97 FPS`、Inference 平均约 `28.87 FPS`，发送端 `result_staleness_ms` 最大约 `110 ms`。所以十几秒延迟是在 PC 的 GStreamer/XVideo 显示链中累积的，不是板端推理或 UDP 发送停顿。
+
+本次降级后不再提供画面内检测框或状态面板。产品画面只显示 A/V；检测、Camera/NPU FPS、Network 和 Recording 状态写入独立 summary JSON。
+
+## 2. 卡顿根因与修复
+
+旧 Viewer 即使关闭 Cairo，仍使用虚拟机中的 GStreamer `tsdemux/decodebin/videoconvert/xvimagesink` 路径；实测三种模式都会累积延迟并出现花屏/撕裂。而相同主机、相同 MPEG-TS/UDP 流使用以下 V8.4 路径完全正常：
+
+```text
+ffplay -fflags nobuffer -flags low_delay -framedrop
+```
+
+这不能说明虚拟机完全没有 1080p30 解码能力；ffplay 正常已经证明它有能力完成本项目所需的基础播放。它说明当前虚拟机的 GStreamer/XVideo 组合不适合作为产品接收路径，继续调 Overlay 的收益和可靠性都不足。
+
+轻量 Viewer 现在拆成两个互不等待的主机侧分支：
+
+```text
+UDP/5000 → ffplay low-latency/framedrop → A/V window
+
+UDP/5001 → Python UDP thread → schema/sequence/counter validation
+                             → optional raw JSONL
+                             → final visionarm.viewer_summary.v1 JSON
+```
+
+Python 通过无 shell 的子进程参数启动 ffplay，播放参数与已经通过测试的 `receive_v8_4_mpegts.sh play-low-latency` 一致。Telemetry 接收不参与视频播放、解码或时钟同步。旧的 `--overlay-mode off/status/bbox` 参数仅为兼容已有命令而保留，三个值现在都使用相同的 ffplay 路径，均不会画框或面板。
+
+## 3. 板端架构和数据流不变
+
+```text
+Camera owner / V4L2 DQBUF
+        │
+CaptureBufferBroker::Publish
+   ┌────┴────────────────────────┐
+   │                             │
+Inference FrameLease         Video FrameLease
+   │                             │
+latest queue(cap=1)          bounded FIFO / PushLatest
+   │                             │
+RGA → RKNN → postprocess     MPP HEVC → owning packets
+   │                             ├→ raw H.265
+TargetStateMachine               ├→ MP4 recorder
+   ├→ UART/STM32                  └→ MPEG-TS/UDP worker :5000
+   └→ LatestResultStore
+             │
+ supervisor 只读采样，不在推理同步路径中
+             │
+       Telemetry mailbox → JSON/UDP worker :5001
+```
+
+必须继续成立的隔离原则：
+
+- UDP/视频传输从不读取、轮询或等待 inference result。
+- Inference 使用自己的 latest-frame queue；Video 使用自己的 bounded FIFO。
+- Capture 向 Video 使用非阻塞 `PushLatest()`，媒体过载不能通过软件队列反压 Inference。
+- MPP 消费 Camera lease 后，Mux、网络和文件只持有编码后 bytes，Video sink 不持有 Camera lease。
+- Telemetry 不属于 `IControlSink` 同步 fanout；socket I/O 和 JSON 序列化由独立 worker 完成。
+- 网络、Recorder 或 Telemetry 故障只锁存故障并令最终报告 FAIL，不篡改推理结果；Camera/Inference 继续运行到 duration，除非推理主流水线自身发生 fatal fault。
+- PC Viewer 只消费 UDP，不向板端回传控制，不改变 H.265/AAC/Telemetry 内容。
+
+软件数据流彼此不等待，但 RKNN、RGA、MPP、DDR 和 CPU 仍共享 SoC 物理资源，因此最终 FPS、延迟和稳定性只能用实机数据判断。
+
+## 4. V8.6 第一轮新增验收契约
+
+`vision_pipeline_r7_r8_probe` 新增：
+
+```text
+requested_duration_seconds
+observed_duration_seconds
+completed_requested_duration
+terminated_by_signal
+broker_outstanding_frames_after_stop
+broker_outstanding_leases_after_stop
+```
+
+程序只有真正到达 duration deadline 才允许最终 PASS。提前 `Ctrl-C`、Inference pipeline 提前停止或其他提前退出会得到：
+
+```text
+completed_requested_duration=0
+vision_pipeline_r7_r8_probe=FAIL
+```
+
+新增 `tools/validate_v8_6_integration_report.py`，离线检查：
+
+- 确实请求并观察到至少 600 秒，且不是信号提前终止。
+- Camera/Broker 在 shutdown 前后的 frame/lease 全为 0。
+- Camera、RGA、RKNN、MPP、H.265、Audio、AAC、MP4、Network、Telemetry、UART 无 fatal/error/drop。
+- 所有必须队列 `capacity>0`、`high_watermark<=capacity`、退出后 `current_size=0`。
+- Audio 与 Network queue 没有 `replaced_oldest` 静默丢包。
+- MP4 写 header 并 clean finalize；MPEG-TS/UDP worker clean finalize。
+- RSS 增长不超过本次命令明确配置的上限。
+- UART link 可用且 parser、read/write、protocol error 全为 0。
+
+Validator 不能证明 MP4 可播放、TS packet 连续、物理 A/V 同步或主机显示流畅，这些仍需后续独立验证。
+
+## 5. 构建与自动测试
+
+沿用已经验证的 RK3588 toolchain、sysroot 和库路径：
 
 ```sh
-cmake -S . -B build-v8-5 \
+cmake -S . -B build-v8-6 \
   -DCMAKE_BUILD_TYPE=Release \
   -DVISIONARM_BUILD_RUNTIME=ON \
   -DVISIONARM_BUILD_TESTS=ON \
@@ -170,6 +142,7 @@ cmake -S . -B build-v8-5 \
   -DVISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER=ON \
   -DVISIONARM_ENABLE_FFMPEG_MP4_MUX=ON \
   -DVISIONARM_ENABLE_FFMPEG_MPEGTS_NETWORK=ON \
+  -DVISIONARM_ENABLE_UART_CONTROL=ON \
   -DRKNN_INCLUDE_DIR=<rknn_include> \
   -DRKNN_LIBRARY=<librknnrt.so> \
   -DRGA_INCLUDE_DIR=<rga_include> \
@@ -181,136 +154,119 @@ cmake -S . -B build-v8-5 \
   -DFFMPEG_AVUTIL_LIBRARY=<libavutil.so> \
   -DFFMPEG_AVFORMAT_LIBRARY=<libavformat.so>
 
-cmake --build build-v8-5 -j"$(nproc)"
-ctest --test-dir build-v8-5 --output-on-failure
+cmake --build build-v8-6 -j"$(nproc)"
+ctest --test-dir build-v8-6 --output-on-failure
 ```
 
-`udp_telemetry_sink_test` 会检查 schema、media PTS、Capture→Result latency、`result_staleness_ms`、UDP loopback 和非有限数拒绝。CMake 找到 Python3 时，CTest 也会自动运行 `v8_5_overlay_core_test`。
+CTest 在找到 Python3 时会自动运行：
 
-PC 上先运行不依赖 GStreamer 的 matcher 测试：
+```text
+v8_5_overlay_core_test
+v8_6_integration_report_test
+v8_6_lightweight_viewer_test
+```
+
+PC 也可直接运行纯 Python 测试：
 
 ```sh
-python3 -m unittest -v tests/v8_5_overlay_core_test.py
+python3 -m unittest -v \
+  tests/v8_5_overlay_core_test.py \
+  tests/v8_6_integration_report_test.py \
+  tests/v8_6_lightweight_viewer_test.py
+
 python3 -m py_compile \
   tools/receive_v8_5_telemetry.py \
   tools/v8_5_overlay_core.py \
-  tools/view_v8_5_overlay.py
+  tools/view_v8_5_overlay.py \
+  tools/validate_v8_6_integration_report.py
 ```
 
-纯 Python 测试覆盖精确/前向 PTS 匹配、未来结果拒绝、结果过期、Telemetry 过期、bounded capacity、重复/乱序和 sequence gap。
+## 6. PC 轻量接收：先启动，再启动板端
 
-## 5. PC 安装 Overlay 依赖
+### 6.1 依赖
 
-Ubuntu/Debian PC：
+只需要 Python3 和带 `ffplay` 的 FFmpeg，不再需要 PyGObject、GStreamer 或 Cairo：
 
 ```sh
 sudo apt update
-sudo apt install \
-  python3-gi python3-cairo gir1.2-gstreamer-1.0 \
-  gstreamer1.0-tools \
-  gstreamer1.0-plugins-base \
-  gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad \
-  gstreamer1.0-plugins-ugly \
-  gstreamer1.0-libav
+sudo apt install ffmpeg
+ffplay -version
 ```
 
-确认关键插件：
-
-```sh
-gst-inspect-1.0 tsdemux decodebin h265parse avdec_h265 aacparse avdec_aac cairooverlay
-```
-
-实际 MPEG-TS 可能同时出现
-`video/x-h265,alignment=nal` 和 `audio/mpeg,mpegversion=2,stream-format=adts`。
-Viewer 不再对这些 encoded caps 写死 parser→decoder 协商，而是把音视频分别
-交给独立 `decodebin` 自动选择 parser/decoder；只有得到 raw caps 后才连接
-Overlay/Audio 输出。启动时应依次看到：
-
-```text
-linked video/x-h265 demux pad: video/x-h265, ... alignment=(string)nal
-linked audio/mpeg demux pad: audio/mpeg, ... mpegversion=(int)2 ...
-linked decoded video/x-raw: video/x-raw, ...
-linked decoded audio/x-raw: audio/x-raw, ...
-```
-
-不应再出现 `GST_PAD_LINK_NOFORMAT` 或 `reason not-negotiated`。
-
-视频 decoder 常输出 I420，而 `cairooverlay` 只接受有限的 RGB raw format。
-Viewer 因此使用固定边界：
-
-```text
-decoded I420/NV12
-→ videoconvert
-→ video/x-raw,format=BGRA
-→ cairooverlay
-→ videoconvert
-→ autovideosink
-```
-
-Decodebin raw-video 动态 pad 只检查 element hierarchy，避免 GStreamer 在第一个
-`videoconvert` 执行之前，把可转换的 I420 错误判成 `GST_PAD_LINK_NOFORMAT`。
-
-防火墙放行：
-
-```text
-UDP/5000 = HEVC+AAC MPEG-TS
-UDP/5001 = visionarm.telemetry.v1 JSON
-```
-
-两个接收工具不能同时绑定 UDP/5001；自动 validator 和 Overlay 应分两次试验运行。
-
-## 6. PC 端运行
-
-先启动 Overlay，再启动板端：
+### 6.2 同时播放 5000 并汇总 5001
 
 ```sh
 python3 tools/view_v8_5_overlay.py \
   --video-port 5000 \
   --telemetry-port 5001 \
-  --result-stale-ms 300 \
-  --telemetry-stale-ms 1000 \
-  --timeline-capacity 512 \
-  --telemetry-log v8_5_overlay_telemetry.jsonl
+  --telemetry-log v8_6_telemetry.jsonl \
+  --summary-json v8_6_view_summary.json
 ```
 
-Viewer 保留 AAC 播放。按 `Ctrl-C` 退出后会输出 received、invalid、out-of-order、sequence gap 和 retained result 摘要。
-
-单独做 wire validation 时：
-
-```sh
-python3 tools/receive_v8_5_telemetry.py \
-  v8_5_telemetry_30s.jsonl 30 5001 \
-  --stale-result-ms 300 \
-  --expect-network enabled \
-  --expect-recording enabled
-```
-
-Telemetry validator 新增检查 `control.result_staleness_ms` 必须有限且非负，并在 summary 输出 stale sample 数和最大 staleness。PASS 仍要求：
+随后启动板端。程序会用以下已验证参数启动 ffplay：
 
 ```text
-parse_errors=0
-schema_errors=0
-sequence_gaps=0
-out_of_order=0
-counter_regressions=0
-network_expectation_ok=1
-recording_expectation_ok=1
-v8_5_telemetry_validation=PASS
+-fflags nobuffer
+-flags low_delay
+-framedrop
+-probesize 5000000
+-analyzeduration 5000000
 ```
 
-## 7. 板端运行
-
-将 `<PC_IP>`、Camera、sensor subdev、model 和输出路径替换为实机值：
+关闭 ffplay 窗口或在启动该 Python 程序的终端按 `Ctrl-C` 后，程序停止 Telemetry receiver 并写出 `v8_6_view_summary.json`。若要自动运行 600 秒：
 
 ```sh
-./build-v8-5/vision_pipeline_r7_r8_probe \
+python3 tools/view_v8_5_overlay.py \
+  --video-port 5000 --telemetry-port 5001 \
+  --duration-seconds 600 \
+  --telemetry-log v8_6_telemetry_600s.jsonl \
+  --summary-json v8_6_view_summary_600s.json
+```
+
+`--overlay-mode status` 和 `--overlay-mode bbox` 仍能被旧命令接受，但会明确提示画面 Overlay 已禁用，并继续使用同一条 ffplay 路径。
+
+### 6.3 Summary JSON 验收
+
+输出 schema 为：
+
+```text
+visionarm.viewer_summary.v1
+```
+
+重点检查：
+
+```text
+video.backend = "ffplay"
+video.low_latency = true
+video.framedrop = true
+video.overlay = "disabled"
+
+telemetry.valid_datagrams > 0
+telemetry.parse_errors = 0
+telemetry.schema_errors = 0
+telemetry.sequence_gaps = 0
+telemetry.out_of_order = 0
+telemetry.counter_regressions = 0
+telemetry.receiver_errors = 0
+telemetry.wire_validation = "PASS"
+```
+
+Summary 还包含 Camera/Inference FPS、Capture→Result latency、result staleness 的 minimum/maximum/mean/last，target/network/recording 各状态计数，以及最后一条有效 Telemetry。原始 datagram 仍可通过 `--telemetry-log` 保存为 JSONL。
+
+注意：Viewer、Telemetry validator 不能同时绑定 UDP/5001；Viewer、TS capture 或另一个 ffplay 也不能同时绑定 UDP/5000。同类测试要分次运行。
+
+## 7. 板端 600 秒 Full Integration
+
+替换 `<PC_IP>`、Camera、sensor subdev、model、UART 和输出路径。测试期间不要按 `Ctrl-C`：
+
+```sh
+./build-v8-6/vision_pipeline_r7_r8_probe \
   --device /dev/videoX \
   --sensor-subdev /dev/v4l-subdev2 \
   --model /path/to/football_960x544.rknn \
-  --output /tmp/v8_5_final.h265 \
-  --av-output /mnt/sdcard/v8_5_final_30s.mp4 \
-  --report /tmp/v8_5_final.report.txt \
+  --output /tmp/v8_6_10min.h265 \
+  --av-output /mnt/sdcard/v8_6_10min.mp4 \
+  --report /tmp/v8_6_10min.report.txt \
   --width 1920 --height 1080 --fps 30 \
   --bitrate 8000000 --gop 30 \
   --buffers 6 --video-queue 2 \
@@ -325,64 +281,90 @@ v8_5_telemetry_validation=PASS
   --network-packet-size 1316 \
   --network-send-buffer-bytes 4194304 \
   --telemetry-host <PC_IP> \
-  --telemetry-port 5001 \
-  --telemetry-interval-ms 100 \
+  --telemetry-port 5001 --telemetry-interval-ms 100 \
   --telemetry-send-buffer-bytes 1048576 \
-  --duration-sec 30 \
-  --control-backend mock
+  --duration-sec 600 \
+  --latency-samples 65536 \
+  --max-rss-growth-kb 65536 \
+  --control-backend uart \
+  --uart-device /dev/ttyS3 \
+  --uart-baud 115200 \
+  --uart-ready-timeout-ms 5000
 ```
 
-先以 `mock` 验收媒体和显示，再使用已经验证的 UART 参数回归；本轮没有修改 wire framing、CRC、SafetyGate、STOP/watchdog 或云台控制算法。
+`--max-rss-growth-kb 65536` 是第一轮建议验收上限，不是普适产品指标。请同时记录 `rss.first_kb`、`rss.last_kb`、`rss.maximum_kb`；若接近上限，第二轮基于真实曲线调整或定位，不能只放宽阈值。
 
-## 8. 板端 report 验收
+## 8. 离线验证板端 report
 
-V8.4 原有 Camera/Audio/MPP/MP4/MPEG-TS/ownership/queue/PTS 条件必须继续全部 PASS，并额外确认：
+将报告复制到主机后运行：
+
+```sh
+python3 tools/validate_v8_6_integration_report.py \
+  v8_6_10min.report.txt \
+  --minimum-duration-seconds 600 \
+  --expect-network enabled \
+  --expect-recording enabled \
+  --expect-telemetry enabled \
+  --expect-control uart
+```
+
+成功必须输出：
 
 ```text
-auxiliary_media_runtime_fault=0
-video_frames_dropped=0
-video_branch_failed=0
-
-telemetry_enabled=1
-telemetry_start_ok=1
-telemetry_start_error=
-telemetry_runtime_fault=0
-telemetry_final_update_ok=1
-telemetry_stop_ok=1
-telemetry_started=1
-telemetry_stopped_cleanly=1
-telemetry_fatal_error=0
-telemetry_control_updates>0
-telemetry_runtime_updates>0
-telemetry_datagrams_attempted>0
-telemetry_datagrams_attempted=telemetry_datagrams_sent
-telemetry_send_failures=0
-telemetry_serialization_failures=0
-telemetry_oversized_datagrams=0
-telemetry_ok=1
-vision_pipeline_r7_r8_probe=PASS
+validation_error_count=0
+v8_6_integration_report_validation=PASS
 ```
 
-同时人工核对：
+只要有 `validation_error=...`，本次 Full Integration 就不通过。不要手工把报告中的 FAIL 改成 PASS。
 
-```text
-0 < telemetry_control_updates <= state_processed_packets
-camera_outstanding_before_stop=0
-broker_outstanding_frames_before_camera_stop=0
-broker_outstanding_leases_before_camera_stop=0
+## 9. MP4、MPEG-TS 与 Telemetry 独立验证
+
+报告 PASS 之后仍需验证真实媒体内容。
+
+本地 MP4：
+
+```sh
+tools/validate_v8_3_av_file.sh \
+  /mnt/sdcard/v8_6_10min.mp4 \
+  /tmp/v8_6_mp4
 ```
 
-## 9. V8.5 最终验收顺序
+另起一次板端运行，在 PC 捕获完整 TS：
 
-1. 运行全部 CTest 和 Python matcher tests。
-2. 30 s Network+Recording+Telemetry：先用 validator，确认 JSON 与 sequence PASS。
-3. 再运行 30 s Overlay：确认 HEVC 画面、AAC 声音、Camera/NPU FPS、Network/Recording 状态均可见。
-4. 足球进入/离开画面：bbox 只在 `DETECTED` 时出现，坐标与原图目标一致；不得画到目标出现前的帧。
-5. Viewer 使用错误的 `--telemetry-port 5999`，板端仍向 5001 发送：视频/音频必须继续，窗口显示 `TELEMETRY: WAITING`，不能冻结媒体。
-6. 正常 Viewer 中停止 telemetry 输入但保持 MPEG-TS：1 s 后显示红色 `TELEMETRY STALE` 且 bbox 消失，A/V 继续。
-7. 人为制造 video FIFO/网络 sink 故障测试：report 必须显式出现 drop/fault 和最终 FAIL；在设定 duration 内 Camera/Inference counter 应继续增长，Camera/Broker lease 最终为 0。
-8. Network+Recording+Telemetry+Overlay+mock 连续 1 分钟，确认无花屏、撕裂、明显 A/V 异常和 bbox 时间倒置。
-9. 换 UART control，完整组合连续 10 分钟；检查 RSS 无持续增长、所有 queue bounded、Audio 无静默 drop、TS continuity/完整解码和 MP4 playable。
-10. 对 10 分钟输出继续运行 V8.4 的 TS/ffprobe/MP4 验证工具。Overlay 人工 PASS 不能替代媒体 packet/timestamp 验证。
+```sh
+tools/receive_v8_4_mpegts.sh capture \
+  v8_6_network_600s.ts 600 5000
 
-完成以上实机项目且 report/PC validator/人工 Overlay 均 PASS 后，V8.5 才可冻结。下一阶段是 V8.6 Full Integration；V7 真实视觉伺服闭环仍未完成，本阶段没有重新调 PID，也不能据此宣称 V7 完成。
+tools/validate_v8_4_network_capture.sh \
+  v8_6_network_600s.ts \
+  v8_6_network_600s
+```
+
+另起 30 秒 Telemetry wire validation：
+
+```sh
+python3 tools/receive_v8_5_telemetry.py \
+  v8_6_telemetry_30s.jsonl 30 5001 \
+  --stale-result-ms 300 \
+  --expect-network enabled \
+  --expect-recording enabled
+```
+
+最后人工确认：
+
+- MP4 从头到尾可播放并 clean finalize，无花屏、撕裂和明显 A/V 不同步。
+- MPEG-TS 完整解码、PTS/DTS 单调、continuity 正常。
+- ffplay 网络播放无持续累积延迟；短时抖动后能通过 framedrop 追上实时画面。
+- UART/STM32 在 10 分钟内无 watchdog、CRC、parser、read/write 异常。
+- 退出后 Camera buffer 全归还，Broker frame/lease 均为 0。
+
+## 10. 第一轮完成边界
+
+本轮已经提供稳定性运行的硬完成语义和自动报告验收，但没有在隔离仓库中宣称以下项目实机 PASS：
+
+- 600 秒全组合稳定性。
+- 网络断开、磁盘写满/Recorder error 的真实故障注入。
+- 物理声画同步。
+- 产品硬件上的 RSS 上限。
+
+请保存以下结果供 V8.6 第二轮使用：板端完整 stderr/stdout、`v8_6_10min.report.txt`、Validator 输出、MP4/TS validation summary、`v8_6_view_summary.json`，以及 ffplay 画面是否仍卡顿的结论。
