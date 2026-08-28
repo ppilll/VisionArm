@@ -508,7 +508,7 @@ void InferencePipeline::PreprocessLoop() noexcept {
     PendingInferenceFrame pending;
     try {
         while (true) {
-            // Final R6 policy: wait for an input slot first. While this thread
+            // Wait for an input slot first. While this thread
             // waits, Capture keeps replacing the single pending latest frame.
             const int64_t wait_start_ns = MonotonicNowNs();
             std::size_t input_slot_index = 0U;

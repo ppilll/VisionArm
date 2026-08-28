@@ -3,12 +3,12 @@
 #include "camera/camera_source.h"
 #include "camera/capture_buffer_contract.h"
 #include "common/pipeline_types.h"
-#include "inference/rknn_engine.h"
-#include "metrics/latency_accumulator.h"
+#include "perception/image_preprocessor.h"
+#include "perception/rknn_engine.h"
+#include "perception/yolov8_postprocess.h"
+#include "pipeline/latency_metrics.h"
 #include "pipeline/bounded_queue.h"
 #include "pipeline/latest_result_store.h"
-#include "postprocess/yolov8_top1_postprocessor.h"
-#include "preprocess/image_preprocessor.h"
 #include "video/encoded_packet_sink.h"
 #include "video/video_encoder.h"
 
@@ -19,7 +19,7 @@
 namespace visionarm {
 
 struct InferencePipelineConfig {
-    // Final R6 low-latency policy: one pending latest frame. When the single
+    // Low-latency policy: one pending latest frame. When the single
     // RKNN input slot is busy, Capture replaces this pending item.
     std::size_t captured_frame_queue_capacity = 1U;
     std::size_t prepared_frame_queue_capacity = 1U;

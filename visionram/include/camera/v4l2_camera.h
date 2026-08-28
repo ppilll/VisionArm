@@ -1,6 +1,7 @@
 #pragma once
 
 #include "camera/camera_source.h"
+#include "camera/v4l2_sensor_controller.h"
 #include "camera/v4l2_dmabuf_contract.h"
 
 #include <atomic>

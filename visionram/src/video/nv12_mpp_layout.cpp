@@ -1,4 +1,4 @@
-#include "video/nv12_mpp_layout.h"
+#include "video/video_support.h"
 
 #include <cstddef>
 #include <cstdint>

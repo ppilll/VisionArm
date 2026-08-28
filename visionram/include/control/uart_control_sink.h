@@ -1,7 +1,7 @@
 #pragma once
 
 #include "control/control_sink.h"
-#include "uart/uart_link.h"
+#include "control/uart_link.h"
 
 #include <array>
 #include <cstdint>
@@ -30,7 +30,7 @@ struct UartControlSinkSnapshot {
     std::optional<uart::ControlUpdateInput> latest_input;
 };
 
-// R6 adapter from the V4 control domain to the frozen R5 UART public API.
+// Adapter from the control domain to the UART public API.
 //
 // This class owns no thread, tty fd or UartLink lifetime. Submit() performs
 // only bounded value conversion plus UartLink::SubmitLatestControl(); it never
