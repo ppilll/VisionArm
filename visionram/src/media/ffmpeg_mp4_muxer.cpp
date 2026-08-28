@@ -1,5 +1,7 @@
 #include "media/ffmpeg_mp4_muxer.h"
 
+#include "logging/logger.h"
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -13,7 +15,6 @@ extern "C" {
 #include <algorithm>
 #include <cstring>
 #include <limits>
-#include <iostream>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -242,11 +243,11 @@ void FfmpegMp4Muxer::Initialize(const FfmpegMp4MuxerConfig& config) {
     const unsigned runtime_avformat_major = avformat_version() >> 16U;
     const unsigned runtime_avcodec_major = avcodec_version() >> 16U;
     const unsigned runtime_avutil_major = avutil_version() >> 16U;
-    std::cerr << "MP4 mux stage=abi_check"
-              << " headers=" << LIBAVFORMAT_VERSION_MAJOR << '/'
-              << LIBAVCODEC_VERSION_MAJOR << '/' << LIBAVUTIL_VERSION_MAJOR
-              << " runtime=" << runtime_avformat_major << '/'
-              << runtime_avcodec_major << '/' << runtime_avutil_major << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "media.mp4",
+                 "ABI check headers=", LIBAVFORMAT_VERSION_MAJOR, '/',
+                 LIBAVCODEC_VERSION_MAJOR, '/', LIBAVUTIL_VERSION_MAJOR,
+                 " runtime=", runtime_avformat_major, '/',
+                 runtime_avcodec_major, '/', runtime_avutil_major);
     if (runtime_avformat_major != LIBAVFORMAT_VERSION_MAJOR ||
         runtime_avcodec_major != LIBAVCODEC_VERSION_MAJOR ||
         runtime_avutil_major != LIBAVUTIL_VERSION_MAJOR) {
@@ -254,7 +255,8 @@ void FfmpegMp4Muxer::Initialize(const FfmpegMp4MuxerConfig& config) {
             "FFmpeg header/runtime major-version mismatch; rebuild against the board Buildroot sysroot");
     }
 
-    std::cerr << "MP4 mux stage=alloc_output_context" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "media.mp4",
+                 "init stage=alloc_output_context");
     int result = avformat_alloc_output_context2(
         &impl_->format, nullptr, "mp4", config.path.c_str());
     if (result < 0 || impl_->format == nullptr) {
@@ -264,9 +266,11 @@ void FfmpegMp4Muxer::Initialize(const FfmpegMp4MuxerConfig& config) {
             AvErrorString(result));
     }
 
-    std::cerr << "MP4 mux stage=new_video_stream" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "media.mp4",
+                 "init stage=new_video_stream");
     impl_->video_stream = avformat_new_stream(impl_->format, nullptr);
-    std::cerr << "MP4 mux stage=new_audio_stream" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "media.mp4",
+                 "init stage=new_audio_stream");
     impl_->audio_stream = avformat_new_stream(impl_->format, nullptr);
     if (impl_->video_stream == nullptr || impl_->audio_stream == nullptr) {
         impl_->CloseLocked();
@@ -278,7 +282,8 @@ void FfmpegMp4Muxer::Initialize(const FfmpegMp4MuxerConfig& config) {
         throw std::runtime_error("FFmpeg stream codecpar is null");
     }
 
-    std::cerr << "MP4 mux stage=video_codecpar" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "media.mp4",
+                 "init stage=video_codecpar");
     AVCodecParameters* video = impl_->video_stream->codecpar;
     video->codec_type = AVMEDIA_TYPE_VIDEO;
     video->codec_id = AV_CODEC_ID_HEVC;
@@ -297,7 +302,8 @@ void FfmpegMp4Muxer::Initialize(const FfmpegMp4MuxerConfig& config) {
     impl_->video_stream->avg_frame_rate = AVRational{
         config.video_fps_numerator, config.video_fps_denominator};
 
-    std::cerr << "MP4 mux stage=audio_codecpar" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "media.mp4",
+                 "init stage=audio_codecpar");
     AVCodecParameters* audio = impl_->audio_stream->codecpar;
     audio->codec_type = AVMEDIA_TYPE_AUDIO;
     audio->codec_id = AV_CODEC_ID_AAC;
@@ -318,7 +324,8 @@ void FfmpegMp4Muxer::Initialize(const FfmpegMp4MuxerConfig& config) {
     impl_->audio_stream->time_base = AVRational{
         1, static_cast<int>(config.audio.sample_rate_hz)};
 
-    std::cerr << "MP4 mux stage=avio_open" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "media.mp4",
+                 "init stage=avio_open");
     if ((impl_->format->oformat->flags & AVFMT_NOFILE) == 0) {
         result = avio_open(&impl_->format->pb, config.path.c_str(), AVIO_FLAG_WRITE);
         if (result < 0) {
@@ -328,7 +335,8 @@ void FfmpegMp4Muxer::Initialize(const FfmpegMp4MuxerConfig& config) {
         }
     }
 
-    std::cerr << "MP4 mux stage=write_header" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "media.mp4",
+                 "init stage=write_header");
     result = avformat_write_header(impl_->format, nullptr);
     if (result < 0) {
         impl_->CloseLocked();
@@ -337,7 +345,7 @@ void FfmpegMp4Muxer::Initialize(const FfmpegMp4MuxerConfig& config) {
     }
     impl_->snapshot.opened = true;
     impl_->snapshot.header_written = true;
-    std::cerr << "MP4 mux stage=ready" << '\n';
+    logging::Log(logging::LogLevel::INFO, "media.mp4", "muxer ready");
 }
 
 bool FfmpegMp4Muxer::Write(const EncodedPacket& packet) noexcept {

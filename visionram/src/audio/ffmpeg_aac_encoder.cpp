@@ -1,5 +1,7 @@
 #include "audio/ffmpeg_aac_encoder.h"
 
+#include "media/ffmpeg_log_control.h"
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/channel_layout.h>
@@ -678,6 +680,7 @@ FfmpegAacEncoder::~FfmpegAacEncoder() {
 }
 
 void FfmpegAacEncoder::Initialize(const FfmpegAacEncoderConfig& config) {
+    ApplyFfmpegLogLevel();
     Shutdown();
     impl_->snapshot = {};
     impl_->config = config;

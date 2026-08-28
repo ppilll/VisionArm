@@ -12,6 +12,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
 
 from validate_v8_6_integration_report import (  # noqa: E402
     Expectations,
+    parse_report_text,
     validate_report,
 )
 
@@ -30,7 +31,22 @@ def add_queue(report: dict[str, str], prefix: str) -> None:
 
 def passing_report() -> dict[str, str]:
     report = {
+        "schema": "visionarm.runtime_report.v1",
+        "schema_version": "1",
+        "report_level": "diagnostic",
+        "value_encoding": "backslash-v1",
+        "result": "PASS",
         "vision_pipeline_r7_r8_probe": "PASS",
+        "topology": "fused",
+        "module.camera.enabled": "1",
+        "module.inference.enabled": "1",
+        "module.video.enabled": "1",
+        "module.audio.enabled": "1",
+        "module.audio_encoder.enabled": "1",
+        "module.recorder.enabled": "1",
+        "module.network.enabled": "1",
+        "module.telemetry.enabled": "1",
+        "module.uart.enabled": "1",
         "requested_duration_seconds": "600",
         "observed_duration_seconds": "600.125",
         "completed_requested_duration": "1",
@@ -73,6 +89,10 @@ def passing_report() -> dict[str, str]:
         "media_audio_timestamp_failures": "0",
         "graceful_shutdown_completed": "1",
         "split_final_completed_frame_drained": "1",
+        "control_ok": "1",
+        "log.flush_ok": "1",
+        "log.dropped_critical": "0",
+        "log.sink_failures": "0",
         "audio_enabled": "1",
         "encoded_audio_enabled": "1",
         "audio_worker_started": "1",
@@ -168,6 +188,61 @@ class V86IntegrationReportTest(unittest.TestCase):
     def test_complete_report_passes(self) -> None:
         self.assertEqual(
             validate_report(passing_report(), self.expectations), [])
+
+    def test_summary_uses_common_contract_only(self) -> None:
+        report = passing_report()
+        report["report_level"] = "summary"
+        for key in list(report):
+            if key.startswith("queue.") or key.startswith("latency."):
+                del report[key]
+        self.assertEqual(
+            validate_report(report, self.expectations), [])
+
+    def test_disabled_modules_do_not_require_detail(self) -> None:
+        report = passing_report()
+        report["report_level"] = "performance"
+        report["module.audio.enabled"] = "0"
+        report["module.audio_encoder.enabled"] = "0"
+        report["module.recorder.enabled"] = "0"
+        report["module.network.enabled"] = "0"
+        report["module.telemetry.enabled"] = "0"
+        report["module.uart.enabled"] = "0"
+        report["control_backend"] = "mock"
+        expectations = Expectations(
+            audio="disabled", network="disabled", recording="disabled",
+            telemetry="disabled", control="mock")
+        self.assertEqual(validate_report(report, expectations), [])
+
+    def test_audio_capture_without_encoded_outputs(self) -> None:
+        report = passing_report()
+        report["report_level"] = "performance"
+        report["module.audio_encoder.enabled"] = "0"
+        report["module.recorder.enabled"] = "0"
+        report["module.network.enabled"] = "0"
+        for key in list(report):
+            if key.startswith((
+                    "audio_encode_", "audio_encoder_",
+                    "audio_encoded_sink_", "queue.audio_encoded")):
+                del report[key]
+        expectations = Expectations(network="disabled", recording="disabled")
+        self.assertEqual(validate_report(report, expectations), [])
+
+    def test_schema_parser_unescapes_and_rejects_duplicates(self) -> None:
+        parsed = parse_report_text(
+            "schema=visionarm.runtime_report.v1\n"
+            "value_encoding=backslash-v1\n"
+            "fatal_message=disk\\=full\\nretry\n")
+        self.assertEqual(parsed["fatal_message"], "disk=full\nretry")
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            parse_report_text("result=PASS\nresult=FAIL\n")
+
+    def test_fault_report_fails_acceptance(self) -> None:
+        report = passing_report()
+        report["report_level"] = "summary"
+        report["result"] = "FAIL"
+        report["fatal_error"] = "1"
+        report["completed_requested_duration"] = "0"
+        self.assert_fails_with(report, "result")
 
     def test_short_or_interrupted_run_fails(self) -> None:
         report = passing_report()

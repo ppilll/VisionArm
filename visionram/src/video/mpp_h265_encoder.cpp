@@ -2,9 +2,10 @@
 
 #include "video/mpp_h265_encoder.h"
 
+#include "logging/logger.h"
+
 #include <algorithm>
 #include <cstdint>
-#include <iostream>
 #include <rk_venc_cfg.h>
 #include <mpp_meta.h>
 #include <mpp_packet.h>
@@ -19,7 +20,8 @@ namespace {
     if (result == MPP_OK) {
         return true;
     }
-    std::cerr << operation << " failed, ret=" << result << '\n';
+    logging::Log(logging::LogLevel::ERROR, "mpp", operation,
+                 " failed, ret=", result);
     return false;
 }
 
@@ -114,14 +116,15 @@ void MppH265Encoder::Initialize(const MppH265EncoderConfig& config) {
         config_.packet_buffer_bytes = DefaultPacketCapacity(config_);
     }
 
-    std::cerr << "MPP init stage=create" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "mpp", "init stage=create");
     if (!MppOk(mpp_create(&context_, &mpi_), "mpp_create") ||
         context_ == nullptr || mpi_ == nullptr) {
         Shutdown();
         throw std::runtime_error("failed to create MPP encoder context");
     }
 
-    std::cerr << "MPP init stage=context_created" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "mpp",
+                 "init stage=context_created");
     MppPollType timeout = MPP_POLL_BLOCK;
     if (!MppOk(
             mpi_->control(context_, MPP_SET_OUTPUT_TIMEOUT, &timeout),
@@ -133,13 +136,13 @@ void MppH265Encoder::Initialize(const MppH265EncoderConfig& config) {
         throw std::runtime_error("failed to initialize MPP HEVC encoder");
     }
 
-    std::cerr << "MPP init stage=configure" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "mpp", "init stage=configure");
     if (!ConfigureEncoder()) {
         Shutdown();
         throw std::runtime_error("failed to configure MPP HEVC encoder");
     }
 
-    std::cerr << "MPP init stage=configured" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "mpp", "init stage=configured");
     if (!MppOk(
             mpp_buffer_group_get_internal(
                 &packet_group_, MPP_BUFFER_TYPE_DRM),
@@ -154,13 +157,13 @@ void MppH265Encoder::Initialize(const MppH265EncoderConfig& config) {
     }
 
     imported_sources_.resize(config_.max_source_buffers);
-    std::cerr << "MPP init stage=codec_header" << '\n';
+    logging::Log(logging::LogLevel::DEBUG, "mpp", "init stage=codec_header");
     if (!BuildCodecHeader()) {
         Shutdown();
         throw std::runtime_error("failed to obtain H.265 VPS/SPS/PPS");
     }
     initialized_ = true;
-    std::cerr << "MPP init stage=ready" << '\n';
+    logging::Log(logging::LogLevel::INFO, "mpp", "encoder ready");
 }
 
 bool MppH265Encoder::ConfigureEncoder() noexcept {
@@ -175,7 +178,8 @@ bool MppH265Encoder::ConfigureEncoder() noexcept {
 
     auto set = [&ok, cfg](const char* key, int value) {
         if (ok && mpp_enc_cfg_set_s32(cfg, key, value) != MPP_OK) {
-            std::cerr << "mpp_enc_cfg_set_s32 failed for " << key << '\n';
+            logging::Log(logging::LogLevel::ERROR, "mpp",
+                         "mpp_enc_cfg_set_s32 failed for ", key);
             ok = false;
         }
     };

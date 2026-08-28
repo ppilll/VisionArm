@@ -57,6 +57,24 @@ option(
     VISIONARM_BUILD_UART_BOARD_TESTS
     "Build real RK3588-to-MCU UART motor-control board tests"
     OFF)
+set(
+    VISIONARM_DEFAULT_LOG_LEVEL
+    "INFO"
+    CACHE STRING
+    "Compile-time default log level: TRACE, DEBUG, INFO, WARN, ERROR, FATAL, OFF")
+set_property(
+    CACHE VISIONARM_DEFAULT_LOG_LEVEL
+    PROPERTY STRINGS TRACE DEBUG INFO WARN ERROR FATAL OFF)
+
+string(TOUPPER "${VISIONARM_DEFAULT_LOG_LEVEL}" VISIONARM_DEFAULT_LOG_LEVEL_UPPER)
+set(_VISIONARM_LOG_LEVEL_NAMES TRACE DEBUG INFO WARN ERROR FATAL OFF)
+list(FIND _VISIONARM_LOG_LEVEL_NAMES
+     "${VISIONARM_DEFAULT_LOG_LEVEL_UPPER}"
+     VISIONARM_DEFAULT_LOG_LEVEL_VALUE)
+if(VISIONARM_DEFAULT_LOG_LEVEL_VALUE EQUAL -1)
+    message(FATAL_ERROR
+        "VISIONARM_DEFAULT_LOG_LEVEL must be TRACE, DEBUG, INFO, WARN, ERROR, FATAL, or OFF")
+endif()
 
 if(VISIONARM_ENABLE_FFMPEG_MP4_MUX AND NOT VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER)
     message(FATAL_ERROR
@@ -82,6 +100,47 @@ target_include_directories(
     visionarm_contract
     INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_library(
+    visionarm_logging
+    STATIC
+        src/logging/logger.cpp)
+add_library(visionarm::logging ALIAS visionarm_logging)
+target_link_libraries(
+    visionarm_logging
+    PUBLIC
+        visionarm::contract
+        Threads::Threads)
+target_compile_definitions(
+    visionarm_logging
+    PUBLIC
+        VISIONARM_COMPILETIME_LOG_LEVEL=${VISIONARM_DEFAULT_LOG_LEVEL_VALUE})
+target_compile_options(
+    visionarm_logging
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Wconversion
+        -Wshadow)
+
+add_library(
+    visionarm_report
+    STATIC
+        src/report/runtime_report.cpp)
+add_library(visionarm::report ALIAS visionarm_report)
+target_link_libraries(
+    visionarm_report
+    PUBLIC
+        visionarm::contract)
+target_compile_options(
+    visionarm_report
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Wconversion
+        -Wshadow)
 
 add_library(
     visionarm_media
@@ -148,7 +207,8 @@ if(VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER)
         STATIC
             src/audio/ffmpeg_aac_encoder.cpp
             src/audio/audio_encode_worker.cpp
-            src/audio/encoded_audio_sink_worker.cpp)
+            src/audio/encoded_audio_sink_worker.cpp
+            src/media/ffmpeg_log_control.cpp)
     add_library(visionarm::audio_encoder ALIAS visionarm_audio_encoder)
     target_include_directories(
         visionarm_audio_encoder
@@ -158,6 +218,7 @@ if(VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER)
         visionarm_audio_encoder
         PUBLIC
             visionarm::contract
+            visionarm::logging
         PRIVATE
             ${FFMPEG_AVCODEC_LIBRARY}
             ${FFMPEG_AVUTIL_LIBRARY})
@@ -220,6 +281,7 @@ if(VISIONARM_ENABLE_FFMPEG_MP4_MUX)
         visionarm_media_mux
         PUBLIC
             visionarm::contract
+            visionarm::logging
         PRIVATE
             ${FFMPEG_AVFORMAT_LIBRARY}
             ${FFMPEG_AVCODEC_LIBRARY}
@@ -550,6 +612,7 @@ if(VISIONARM_BUILD_RUNTIME)
         visionarm_pipeline
         PUBLIC
             visionarm::capture
+            visionarm::logging
             ${RKNN_LIBRARY})
     target_include_directories(
         visionarm_pipeline
@@ -679,7 +742,9 @@ if(VISIONARM_BUILD_RUNTIME AND VISIONARM_BUILD_ACCELERATION_TOOLS)
         target_link_libraries(
             vision_pipeline_r7_r8_probe
             PRIVATE
-                visionarm::pipeline)
+                visionarm::pipeline
+                visionarm::logging
+                visionarm::report)
         if(VISIONARM_ENABLE_UART_CONTROL)
             target_link_libraries(
                 vision_pipeline_r7_r8_probe
@@ -751,6 +816,38 @@ endif()
 
 if(VISIONARM_BUILD_TESTS)
     enable_testing()
+
+    add_executable(
+        logger_test
+        tests/logger_test.cpp)
+    target_link_libraries(
+        logger_test
+        PRIVATE
+            visionarm::logging)
+    target_compile_options(
+        logger_test
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
+
+    add_executable(
+        runtime_report_test
+        tests/runtime_report_test.cpp)
+    target_link_libraries(
+        runtime_report_test
+        PRIVATE
+            visionarm::report)
+    target_compile_options(
+        runtime_report_test
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow)
 
     add_executable(
         capture_buffer_contract_test
@@ -962,6 +1059,12 @@ if(VISIONARM_BUILD_TESTS)
     add_test(
         NAME udp_telemetry_sink_test
         COMMAND udp_telemetry_sink_test)
+    add_test(
+        NAME logger_test
+        COMMAND logger_test)
+    add_test(
+        NAME runtime_report_test
+        COMMAND runtime_report_test)
 
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
@@ -995,6 +1098,8 @@ if(VISIONARM_BUILD_TESTS)
         media_clock_test
         encoded_audio_packet_contract_test
         udp_telemetry_sink_test
+        logger_test
+        runtime_report_test
         PROPERTIES TIMEOUT 15)
 
     if(VISIONARM_ENABLE_UART_CONTROL)

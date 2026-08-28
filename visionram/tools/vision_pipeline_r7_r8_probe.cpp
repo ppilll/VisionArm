@@ -10,6 +10,7 @@
 #if defined(VISIONARM_HAS_AUDIO_ENCODE)
 #include "audio/audio_encode_worker.h"
 #include "audio/encoded_audio_sink_worker.h"
+#include "media/ffmpeg_log_control.h"
 #endif
 #if defined(VISIONARM_HAS_AV_MUX)
 #include "media/ffmpeg_mp4_muxer.h"
@@ -23,11 +24,13 @@
 #include "uart/uart_link.h"
 #endif
 #include "inference/rknn_engine.h"
+#include "logging/logger.h"
 #include "pipeline/inference_pipeline.h"
 #include "pipeline/latest_result_store.h"
 #include "pipeline/target_state_machine.h"
 #include "postprocess/yolov8_top1_postprocessor.h"
 #include "preprocess/rga_letterbox_preprocessor.h"
+#include "report/runtime_report.h"
 #include "video/h265_file_sink.h"
 #include "video/mpp_h265_encoder.h"
 #include "telemetry/udp_telemetry_sink.h"
@@ -45,8 +48,10 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -54,13 +59,20 @@
 namespace {
 
 std::atomic<bool> g_stop{false};
+std::atomic<bool> g_reload_log_config{false};
 
 constexpr int kModelWidth = 960;
 constexpr int kModelHeight = 544;
 constexpr int kClassCount = 1;
 constexpr int kTargetClassId = 0;
 
-void SignalHandler(int) {
+void SignalHandler(int signal_number) {
+#if defined(SIGHUP)
+    if (signal_number == SIGHUP) {
+        g_reload_log_config.store(true, std::memory_order_release);
+        return;
+    }
+#endif
     g_stop.store(true, std::memory_order_release);
 }
 
@@ -83,6 +95,10 @@ struct Options {
     std::string model;
     std::string output;
     std::string report;
+    visionarm::report::ReportLevel report_level =
+        visionarm::report::ReportLevel::SUMMARY;
+    visionarm::logging::LoggerConfig log_config;
+    std::string log_config_path;
     std::string input_dma_heap =
         "/dev/dma_heap/system-uncached-dma32";
     int width = 0;
@@ -153,9 +169,9 @@ struct Options {
     }
     const std::int64_t eight_datagrams =
         static_cast<std::int64_t>(options.network_packet_size) * 8LL * 8LL;
-    return std::max(
-        EffectiveNetworkRateBps(options) / static_cast<std::int64_t>(100),
-        eight_datagrams);
+    return std::max(EffectiveNetworkRateBps(options) /
+                        static_cast<std::int64_t>(100),
+                eight_datagrams);
 }
 
 [[noreturn]] void Usage(const char* program) {
@@ -183,9 +199,12 @@ struct Options {
         << "  [--max-result-age-ms N] [--latency-samples N] \\\n"
         << "  [--max-rss-growth-kb N] [--vertical-stride N] \\\n"
         << "  [--input-dma-heap PATH] [--confidence F] [--report PATH] \\\n"
+        << "  [--report-level summary|performance|diagnostic] \\\n"
+        << "  [--log-level LEVEL] [--log-module MODULE=LEVEL] \\\n"
+        << "  [--log-config PATH] \\\n"
         << "  [--control-backend mock|uart] [--uart-device /dev/ttyS3] \\\n"
         << "  [--uart-baud 115200] [--uart-ready-timeout-ms 5000]\n";
-    std::exit(EXIT_FAILURE);
+    throw std::invalid_argument("invalid or incomplete command line");
 }
 
 int ParsePositiveInt(const char* text, const char* name) {
@@ -286,6 +305,31 @@ Options ParseOptions(int argc, char** argv) {
         else if (key == "--model") options.model = next();
         else if (key == "--output") options.output = next();
         else if (key == "--report") options.report = next();
+        else if (key == "--report-level") {
+            const std::string value = next();
+            if (!visionarm::report::ParseReportLevel(
+                    value, &options.report_level)) {
+                throw std::invalid_argument(
+                    "report level must be summary, performance, or diagnostic");
+            }
+        }
+        else if (key == "--log-level") {
+            const std::string value = next();
+            if (!visionarm::logging::ParseLogLevel(
+                    value, &options.log_config.default_level)) {
+                throw std::invalid_argument(
+                    "log level must be TRACE, DEBUG, INFO, WARN, ERROR, FATAL, or OFF");
+            }
+        }
+        else if (key == "--log-module") {
+            const std::string value = next();
+            std::string error;
+            if (!visionarm::logging::ApplyModuleLogLevel(
+                    value, &options.log_config, &error)) {
+                throw std::invalid_argument(error);
+            }
+        }
+        else if (key == "--log-config") options.log_config_path = next();
         else if (key == "--width") options.width = ParsePositiveInt(next(), "width");
         else if (key == "--height") options.height = ParsePositiveInt(next(), "height");
         else if (key == "--fps") options.fps = ParseCameraFps(next());
@@ -450,6 +494,67 @@ Options ParseOptions(int argc, char** argv) {
             "video queue is too large for the V4L2 pool");
     }
     return options;
+}
+
+[[nodiscard]] bool LoadEffectiveLoggerConfig(
+    const Options& options,
+    visionarm::logging::LoggerConfig* config,
+    std::string* error) {
+    if (config == nullptr) return false;
+    if (options.log_config_path.empty()) {
+        *config = options.log_config;
+        return true;
+    }
+    return visionarm::logging::LoadLoggerConfigFile(
+        options.log_config_path, options.log_config, config, error);
+}
+
+void ReloadLoggerFromSupervisor(const Options& options) noexcept {
+    try {
+        if (options.log_config_path.empty()) {
+            visionarm::logging::Log(
+                visionarm::logging::LogLevel::WARN, "runtime",
+                "SIGHUP ignored because --log-config was not supplied");
+            return;
+        }
+        visionarm::logging::LoggerConfig config;
+        std::string error;
+        if (!LoadEffectiveLoggerConfig(options, &config, &error) ||
+            !visionarm::logging::ConfigureGlobalLogger(config, &error)) {
+            visionarm::logging::Log(
+                visionarm::logging::LogLevel::ERROR, "runtime",
+                "log config reload failed; keeping previous config: ", error);
+            return;
+        }
+#if defined(VISIONARM_HAS_AUDIO_ENCODE)
+        visionarm::ApplyFfmpegLogLevel();
+#endif
+        visionarm::logging::Log(
+            visionarm::logging::LogLevel::INFO, "runtime",
+            "log config reloaded from ", options.log_config_path,
+            " default_level=",
+            visionarm::logging::LogLevelName(config.default_level));
+    } catch (const std::exception& error) {
+        visionarm::logging::Log(
+            visionarm::logging::LogLevel::ERROR, "runtime",
+            "log config reload failed; keeping previous config: ",
+            error.what());
+    } catch (...) {
+        visionarm::logging::Log(
+            visionarm::logging::LogLevel::ERROR, "runtime",
+            "log config reload failed with unknown exception");
+    }
+}
+
+std::string FindOptionValue(
+    int argc, char** argv, std::string_view option) {
+    for (int index = 1; index + 1 < argc; ++index) {
+        if (argv[index] != nullptr && option == argv[index] &&
+            argv[index + 1] != nullptr) {
+            return argv[index + 1];
+        }
+    }
+    return {};
 }
 
 #if defined(VISIONARM_HAS_UART_CONTROL)
@@ -782,10 +887,32 @@ std::vector<std::uint8_t> ConcatenateCodecConfig(
 }  // namespace
 
 int main(int argc, char** argv) {
+    Options options;
+    bool options_parsed = false;
     try {
-        const Options options = ParseOptions(argc, argv);
+        options = ParseOptions(argc, argv);
+        options_parsed = true;
+        visionarm::logging::LoggerConfig logger_config;
+        std::string logger_error;
+        if (!LoadEffectiveLoggerConfig(
+                options, &logger_config, &logger_error) ||
+            !visionarm::logging::ConfigureGlobalLogger(
+                logger_config, &logger_error)) {
+            throw std::runtime_error(
+                "failed to configure logger: " + logger_error);
+        }
         std::signal(SIGINT, SignalHandler);
         std::signal(SIGTERM, SignalHandler);
+#if defined(SIGHUP)
+        std::signal(SIGHUP, SignalHandler);
+#endif
+        visionarm::logging::Log(
+            visionarm::logging::LogLevel::INFO, "runtime",
+            "startup duration_sec=", options.duration_seconds,
+            " report_level=",
+            visionarm::report::ReportLevelName(options.report_level),
+            " log_level=",
+            visionarm::logging::LogLevelName(logger_config.default_level));
 
         visionarm::V4L2CameraConfig camera_config;
         camera_config.device = options.device;
@@ -816,17 +943,14 @@ int main(int argc, char** argv) {
                 "R7/R8 requires frozen single-plane linear NV12");
         }
 
-        std::cout << "camera requested="
-                  << options.width << 'x' << options.height
-                  << '@' << options.fps
-                  << " sensor_subdev=" << options.sensor_subdev
-                  << " configured_sensor_fps="
-                  << configured_sensor_fps.numerator << '/'
-                  << configured_sensor_fps.denominator
-                  << " isp_output=" << camera_format.width << 'x'
-                  << camera_format.height << ' '
-                  << visionarm::FourccToString(camera_format.pixel_format)
-                  << '\n';
+        visionarm::logging::Log(
+            visionarm::logging::LogLevel::INFO, "camera",
+            "requested=", options.width, 'x', options.height, '@', options.fps,
+            " sensor_subdev=", options.sensor_subdev,
+            " configured_sensor_fps=", configured_sensor_fps.numerator, '/',
+            configured_sensor_fps.denominator, " isp_output=",
+            camera_format.width, 'x', camera_format.height, ' ',
+            visionarm::FourccToString(camera_format.pixel_format));
 
         visionarm::RknnEngineConfig engine_config;
         engine_config.model_path = options.model;
@@ -905,8 +1029,10 @@ int main(int argc, char** argv) {
             uart_control_sink =
                 std::make_unique<visionarm::UartControlSink>(*uart_link);
             selected_control_sink = uart_control_sink.get();
-            std::cout << "UART READY device=" << options.uart_device
-                      << " baud=" << options.uart_baud << '\n';
+            visionarm::logging::Log(
+                visionarm::logging::LogLevel::INFO, "uart",
+                "link READY device=", options.uart_device,
+                " baud=", options.uart_baud);
         }
 #endif
 
@@ -928,15 +1054,16 @@ int main(int argc, char** argv) {
                 std::make_unique<visionarm::UdpTelemetrySink>(telemetry_config);
             if (!telemetry_sink->Start(&telemetry_start_error)) {
                 telemetry_start_ok = false;
-                std::cerr << "telemetry disabled after Start failure: "
-                          << telemetry_start_error << '\n';
+                visionarm::logging::Log(
+                    visionarm::logging::LogLevel::WARN, "telemetry",
+                    "disabled after Start failure: ", telemetry_start_error);
             } else {
-                std::cout << "telemetry enabled destination="
-                          << options.telemetry_host << ':'
-                          << options.telemetry_port
-                          << " interval_ms=" << options.telemetry_interval_ms
-                          << " send_buffer_bytes="
-                          << options.telemetry_send_buffer_bytes << '\n';
+                visionarm::logging::Log(
+                    visionarm::logging::LogLevel::INFO, "telemetry",
+                    "enabled destination=", options.telemetry_host, ':',
+                    options.telemetry_port, " interval_ms=",
+                    options.telemetry_interval_ms, " send_buffer_bytes=",
+                    options.telemetry_send_buffer_bytes);
             }
         }
 
@@ -979,12 +1106,16 @@ int main(int argc, char** argv) {
 
         visionarm::MppH265Encoder encoder;
         encoder.Initialize(encoder_config);
-        std::cerr << "startup stage=mpp_ready" << '\n';
+        visionarm::logging::Log(
+            visionarm::logging::LogLevel::DEBUG, "runtime",
+            "startup stage=mpp_ready");
         visionarm::H265FileSink file_sink(options.output);
         if (!file_sink.opened()) {
             throw std::runtime_error("failed to open output H.265 file");
         }
-        std::cerr << "startup stage=h265_sink_ready" << '\n';
+        visionarm::logging::Log(
+            visionarm::logging::LogLevel::DEBUG, "runtime",
+            "startup stage=h265_sink_ready");
         visionarm::IEncodedPacketSink* selected_video_sink = &file_sink;
 
 #if defined(VISIONARM_HAS_ALSA_AUDIO)
@@ -1021,7 +1152,9 @@ int main(int argc, char** argv) {
 #endif
 
         if (encoded_audio_enabled) {
-            std::cerr << "startup stage=encoded_audio_path_begin" << '\n';
+            visionarm::logging::Log(
+                visionarm::logging::LogLevel::DEBUG, "runtime",
+                "startup stage=encoded_audio_path_begin");
             audio_encoded_queue = std::make_unique<
                 visionarm::BoundedQueue<visionarm::EncodedAudioPacket>>(
                     static_cast<std::size_t>(options.audio_encoded_queue));
@@ -1035,7 +1168,9 @@ int main(int argc, char** argv) {
                 visionarm::AudioSampleFormat::kS16LE;
             audio_encoder_config.bit_rate_bps = options.audio_bitrate;
 
-            std::cerr << "startup stage=audio_encode_worker_construct" << '\n';
+            visionarm::logging::Log(
+                visionarm::logging::LogLevel::DEBUG, "runtime",
+                "startup stage=audio_encode_worker_construct");
             audio_encode_worker = std::make_unique<visionarm::AudioEncodeWorker>(
                 audio_encoder_config,
                 &audio_pcm_queue,
@@ -1044,13 +1179,17 @@ int main(int argc, char** argv) {
                     audio_timeline_stats.Consume(chunk);
                 });
             std::string audio_encode_error;
-            std::cerr << "startup stage=audio_encode_worker_start" << '\n';
+            visionarm::logging::Log(
+                visionarm::logging::LogLevel::DEBUG, "runtime",
+                "startup stage=audio_encode_worker_start");
             if (!audio_encode_worker->Start(&audio_encode_error)) {
                 throw std::runtime_error(
                     "audio encoder Start failed: " + audio_encode_error);
             }
 
-            std::cerr << "startup stage=audio_encode_worker_ready" << '\n';
+            visionarm::logging::Log(
+                visionarm::logging::LogLevel::DEBUG, "runtime",
+                "startup stage=audio_encode_worker_ready");
             const std::vector<std::uint8_t> hevc_codec_config =
                 ConcatenateCodecConfig(encoder.CodecConfigPackets());
 
@@ -1071,23 +1210,28 @@ int main(int argc, char** argv) {
                     static_cast<std::int32_t>(configured_sensor_fps.denominator);
                 mux_config.hevc_annexb_codec_config = hevc_codec_config;
                 mux_config.audio = audio_encode_worker->stream_info();
-                std::cerr
-                    << "startup stage=mux_config_ready hevc_extradata_bytes="
-                    << mux_config.hevc_annexb_codec_config.size()
-                    << " aac_extradata_bytes="
-                    << mux_config.audio.codec_config.size() << '\n';
+                visionarm::logging::Log(
+                    visionarm::logging::LogLevel::DEBUG, "runtime",
+                    "startup stage=mux_config_ready hevc_extradata_bytes=",
+                    mux_config.hevc_annexb_codec_config.size(),
+                    " aac_extradata_bytes=",
+                    mux_config.audio.codec_config.size());
 
                 av_muxer = std::make_unique<visionarm::FfmpegMp4Muxer>();
-                std::cerr << "startup stage=mp4_mux_initialize" << '\n';
+                visionarm::logging::Log(
+                    visionarm::logging::LogLevel::DEBUG, "runtime",
+                    "startup stage=mp4_mux_initialize");
                 av_muxer->Initialize(mux_config);
-                std::cerr << "startup stage=mp4_mux_ready" << '\n';
+                visionarm::logging::Log(
+                    visionarm::logging::LogLevel::DEBUG, "runtime",
+                    "startup stage=mp4_mux_ready");
                 audio_sinks.push_back(av_muxer.get());
                 video_sinks.push_back(av_muxer.get());
-                std::cout
-                    << "local A/V mux enabled output=" << options.av_output
-                    << " audio_bitrate=" << options.audio_bitrate
-                    << " encoded_audio_queue=" << options.audio_encoded_queue
-                    << '\n';
+                visionarm::logging::Log(
+                    visionarm::logging::LogLevel::INFO, "media.mp4",
+                    "enabled output=", options.av_output,
+                    " audio_bitrate=", options.audio_bitrate,
+                    " encoded_audio_queue=", options.audio_encoded_queue);
             }
 #endif
 
@@ -1121,20 +1265,25 @@ int main(int argc, char** argv) {
 
                 network_muxer =
                     std::make_unique<visionarm::FfmpegMpegTsUdpSink>();
-                std::cerr << "startup stage=mpegts_udp_initialize" << '\n';
+                visionarm::logging::Log(
+                    visionarm::logging::LogLevel::DEBUG, "runtime",
+                    "startup stage=mpegts_udp_initialize");
                 network_muxer->Initialize(network_config);
-                std::cerr << "startup stage=mpegts_udp_ready" << '\n';
+                visionarm::logging::Log(
+                    visionarm::logging::LogLevel::DEBUG, "runtime",
+                    "startup stage=mpegts_udp_ready");
                 audio_sinks.push_back(network_muxer.get());
                 video_sinks.push_back(network_muxer.get());
-                std::cout << "network A/V enabled url=" << options.network_url
-                          << " packet_queue=" << options.network_queue
-                          << " io_timeout_ms=" << options.network_io_timeout_ms
-                          << " rate_bps=" << network_config.udp_bit_rate_bps
-                          << " burst_bits=" << network_config.udp_burst_bits
-                          << " packet_size=" << network_config.udp_packet_size
-                          << " send_buffer_bytes="
-                          << network_config.udp_send_buffer_bytes
-                          << '\n';
+                visionarm::logging::Log(
+                    visionarm::logging::LogLevel::INFO, "media.network",
+                    "enabled url=", options.network_url,
+                    " packet_queue=", options.network_queue,
+                    " io_timeout_ms=", options.network_io_timeout_ms,
+                    " rate_bps=", network_config.udp_bit_rate_bps,
+                    " burst_bits=", network_config.udp_burst_bits,
+                    " packet_size=", network_config.udp_packet_size,
+                    " send_buffer_bytes=",
+                    network_config.udp_send_buffer_bytes);
             }
 #endif
 
@@ -1210,15 +1359,16 @@ int main(int argc, char** argv) {
                     "audio capture Start failed: " + audio_error);
             }
             const auto audio_start = audio_worker->Snapshot();
-            std::cout << "audio device=" << audio_start.capture_info.device
-                      << " rate=" << audio_start.capture_info.format.sample_rate_hz
-                      << " channels=" << audio_start.capture_info.format.channels
-                      << " period_frames=" << audio_start.capture_info.period_frames
-                      << " buffer_frames=" << audio_start.capture_info.buffer_frames
-                      << " timestamp=" << audio_start.capture_info.timestamp_type
-                      << " queue_capacity=" << options.audio_queue
-                      << " media_epoch_ns=" << media_clock.epoch_monotonic_ns()
-                      << '\n';
+            visionarm::logging::Log(
+                visionarm::logging::LogLevel::INFO, "audio",
+                "device=", audio_start.capture_info.device,
+                " rate=", audio_start.capture_info.format.sample_rate_hz,
+                " channels=", audio_start.capture_info.format.channels,
+                " period_frames=", audio_start.capture_info.period_frames,
+                " buffer_frames=", audio_start.capture_info.buffer_frames,
+                " timestamp=", audio_start.capture_info.timestamp_type,
+                " queue_capacity=", options.audio_queue,
+                " media_epoch_ns=", media_clock.epoch_monotonic_ns());
         }
 #endif
 
@@ -1317,8 +1467,9 @@ int main(int argc, char** argv) {
         bool telemetry_runtime_fault = !telemetry_start_ok;
         if (!telemetry_runtime_fault && !update_telemetry()) {
             telemetry_runtime_fault = true;
-            std::cerr
-                << "telemetry initial update failed; pipeline remains active\n";
+            visionarm::logging::Log(
+                visionarm::logging::LogLevel::WARN, "telemetry",
+                "initial update failed; pipeline remains active");
         }
 
         RssSamples rss;
@@ -1332,6 +1483,10 @@ int main(int argc, char** argv) {
         while (!g_stop.load(std::memory_order_acquire) &&
                std::chrono::steady_clock::now() < deadline &&
                pipeline.running()) {
+            if (g_reload_log_config.exchange(
+                    false, std::memory_order_acq_rel)) {
+                ReloadLoggerFromSupervisor(options);
+            }
 #if defined(VISIONARM_HAS_ALSA_AUDIO)
             if (options.audio_enabled) {
 #if defined(VISIONARM_HAS_AUDIO_ENCODE)
@@ -1355,9 +1510,9 @@ int main(int argc, char** argv) {
                 }
                 if (encoded_path_fatal) {
                     if (!auxiliary_media_runtime_fault) {
-                        std::cerr
-                            << "audio/mux/network runtime fault; inference "
-                            << "remains active\n";
+                        visionarm::logging::Log(
+                            visionarm::logging::LogLevel::ERROR, "media",
+                            "audio/mux/network runtime fault; inference remains active");
                     }
                     auxiliary_media_runtime_fault = true;
                 }
@@ -1366,8 +1521,9 @@ int main(int argc, char** argv) {
 #endif
                 if (audio_worker->Snapshot().fatal_error) {
                     if (!auxiliary_media_runtime_fault) {
-                        std::cerr
-                            << "audio runtime fault; inference remains active\n";
+                        visionarm::logging::Log(
+                            visionarm::logging::LogLevel::ERROR, "audio",
+                            "runtime fault; inference remains active");
                     }
                     auxiliary_media_runtime_fault = true;
                 }
@@ -1377,8 +1533,9 @@ int main(int argc, char** argv) {
                 (!update_telemetry() ||
                  telemetry_sink->Snapshot().fatal_error)) {
                 telemetry_runtime_fault = true;
-                std::cerr
-                    << "telemetry runtime fault; pipeline remains active\n";
+                visionarm::logging::Log(
+                    visionarm::logging::LogLevel::WARN, "telemetry",
+                    "runtime fault; pipeline remains active");
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             if (std::chrono::steady_clock::now() >= next_rss_sample) {
@@ -1479,24 +1636,49 @@ int main(int argc, char** argv) {
         }
 #endif
 
-        std::ofstream report_file;
-        std::ostream* output_stream = &std::cout;
-        if (!options.report.empty()) {
-            report_file.open(options.report, std::ios::trunc);
-            if (!report_file) {
-                throw std::runtime_error("failed to open report file");
-            }
-            output_stream = &report_file;
-        }
-        std::ostream& report = *output_stream;
+        // Collect the diagnostic superset in memory after all realtime workers
+        // have stopped. The product serializer filters this into the requested
+        // stable level and performs the only report I/O on this control path.
+        std::ostringstream diagnostic_report;
+        std::ostream& report = diagnostic_report;
         report << std::fixed << std::setprecision(3);
+        report << "module.camera.enabled=1\n";
+        report << "module.inference.enabled=1\n";
+        report << "module.video.enabled=1\n";
+        report << "module.audio.enabled="
+               << (options.audio_enabled ? 1 : 0) << '\n';
+#if defined(VISIONARM_HAS_AUDIO_ENCODE)
+        report << "module.audio_encoder.enabled="
+               << (encoded_audio_enabled ? 1 : 0) << '\n';
+#else
+        report << "module.audio_encoder.enabled=0\n";
+#endif
+#if defined(VISIONARM_HAS_AV_MUX)
+        report << "module.recorder.enabled="
+               << (av_mux_enabled ? 1 : 0) << '\n';
+#else
+        report << "module.recorder.enabled=0\n";
+#endif
+#if defined(VISIONARM_HAS_NETWORK_MUX)
+        report << "module.network.enabled="
+               << (network_mux_enabled ? 1 : 0) << '\n';
+#else
+        report << "module.network.enabled=0\n";
+#endif
+        report << "module.telemetry.enabled="
+               << (telemetry_enabled ? 1 : 0) << '\n';
+        report << "module.uart.enabled="
+               << (options.control_backend == ControlBackend::UART ? 1 : 0)
+               << '\n';
         report << "topology="
                << visionarm::InferenceThreadTopologyName(stats.topology)
                << '\n';
         report << "camera_requested_width=" << options.width << '\n';
         report << "camera_requested_height=" << options.height << '\n';
         report << "camera_requested_fps=" << options.fps << '\n';
-        report << "camera_sensor_subdev=" << options.sensor_subdev << '\n';
+        report << "camera_sensor_subdev="
+               << visionarm::report::EscapeReportValue(options.sensor_subdev)
+               << '\n';
         report << "camera_configured_fps_numerator="
                << configured_sensor_fps.numerator << '\n';
         report << "camera_configured_fps_denominator="
@@ -1519,7 +1701,10 @@ int main(int argc, char** argv) {
         report << "audio_enabled=" << (options.audio_enabled ? 1 : 0) << '\n';
         if (options.audio_enabled && audio_worker_stats.has_value()) {
             const auto& audio = *audio_worker_stats;
-            report << "audio_device=" << audio.capture_info.device << '\n';
+            report << "audio_device="
+                   << visionarm::report::EscapeReportValue(
+                          audio.capture_info.device)
+                   << '\n';
             report << "audio_rate_hz="
                    << audio.capture_info.format.sample_rate_hz << '\n';
             report << "audio_channels="
@@ -1529,11 +1714,15 @@ int main(int argc, char** argv) {
             report << "audio_buffer_frames="
                    << audio.capture_info.buffer_frames << '\n';
             report << "audio_timestamp_type="
-                   << audio.capture_info.timestamp_type << '\n';
+                   << visionarm::report::EscapeReportValue(
+                          audio.capture_info.timestamp_type)
+                   << '\n';
             report << "audio_worker_started=" << (audio.started ? 1 : 0) << '\n';
             report << "audio_worker_fatal_error="
                    << (audio.fatal_error ? 1 : 0) << '\n';
-            report << "audio_worker_last_error=" << audio.last_error << '\n';
+            report << "audio_worker_last_error="
+                   << visionarm::report::EscapeReportValue(audio.last_error)
+                   << '\n';
             report << "audio_timed_chunks=" << audio.timed_chunks << '\n';
             report << "audio_timed_frames=" << audio.timed_frames << '\n';
             report << "audio_timed_bytes=" << audio.timed_bytes << '\n';
@@ -1558,7 +1747,10 @@ int main(int argc, char** argv) {
                 const auto& encode = *audio_encode_stats;
                 report << "audio_encode_worker_started=" << (encode.started ? 1 : 0) << '\n';
                 report << "audio_encode_worker_fatal_error=" << (encode.fatal_error ? 1 : 0) << '\n';
-                report << "audio_encode_worker_last_error=" << encode.last_error << '\n';
+                report << "audio_encode_worker_last_error="
+                       << visionarm::report::EscapeReportValue(
+                              encode.last_error)
+                       << '\n';
                 report << "audio_encode_chunks_consumed=" << encode.chunks_consumed << '\n';
                 report << "audio_encode_packets_pushed=" << encode.packets_pushed << '\n';
                 report << "audio_encode_bytes_pushed=" << encode.bytes_pushed << '\n';
@@ -1586,14 +1778,18 @@ int main(int argc, char** argv) {
 #if defined(VISIONARM_HAS_AV_MUX)
         report << "local_av_mux_enabled=" << (av_mux_enabled ? 1 : 0) << '\n';
         if (av_mux_enabled) {
-            report << "local_av_output=" << options.av_output << '\n';
+            report << "local_av_output="
+                   << visionarm::report::EscapeReportValue(options.av_output)
+                   << '\n';
             report << "local_av_finalize_ok=" << (av_mux_finalize_ok ? 1 : 0) << '\n';
             if (av_mux_stats.has_value()) {
                 const auto& mux = *av_mux_stats;
                 report << "local_av_header_written=" << (mux.header_written ? 1 : 0) << '\n';
                 report << "local_av_finalized=" << (mux.finalized ? 1 : 0) << '\n';
                 report << "local_av_fatal_error=" << (mux.fatal_error ? 1 : 0) << '\n';
-                report << "local_av_last_error=" << mux.last_error << '\n';
+                report << "local_av_last_error="
+                       << visionarm::report::EscapeReportValue(mux.last_error)
+                       << '\n';
                 report << "local_av_video_fragments_received=" << mux.video_fragments_received << '\n';
                 report << "local_av_video_samples_written=" << mux.video_samples_written << '\n';
                 report << "local_av_video_bytes_written=" << mux.video_bytes_written << '\n';
@@ -1611,7 +1807,9 @@ int main(int argc, char** argv) {
         report << "network_mux_enabled="
                << (network_mux_enabled ? 1 : 0) << '\n';
         if (network_mux_enabled) {
-            report << "network_url=" << options.network_url << '\n';
+            report << "network_url="
+                   << visionarm::report::EscapeReportValue(options.network_url)
+                   << '\n';
             report << "network_queue_capacity=" << options.network_queue << '\n';
             report << "network_io_timeout_ms="
                    << options.network_io_timeout_ms << '\n';
@@ -1630,7 +1828,10 @@ int main(int argc, char** argv) {
                 report << "network_finalized=" << (network.finalized ? 1 : 0) << '\n';
                 report << "network_fatal_error="
                        << (network.fatal_error ? 1 : 0) << '\n';
-                report << "network_last_error=" << network.last_error << '\n';
+                report << "network_last_error="
+                       << visionarm::report::EscapeReportValue(
+                              network.last_error)
+                       << '\n';
                 report << "network_video_fragments_received="
                        << network.video_fragments_received << '\n';
                 report << "network_video_access_units_enqueued="
@@ -1712,16 +1913,23 @@ int main(int argc, char** argv) {
         report << "lost_misses=" << options.lost_misses << '\n';
         report << "max_result_age_ms=" << options.max_result_age_ms << '\n';
         report << "control_backend="
-               << ControlBackendName(options.control_backend) << '\n';
+               << visionarm::report::EscapeReportValue(
+                      ControlBackendName(options.control_backend))
+               << '\n';
         if (options.control_backend == ControlBackend::UART) {
-            report << "uart_device=" << options.uart_device << '\n';
+            report << "uart_device="
+                   << visionarm::report::EscapeReportValue(options.uart_device)
+                   << '\n';
             report << "uart_baud=" << options.uart_baud << '\n';
             report << "uart_ready_timeout_ms="
                    << options.uart_ready_timeout_ms << '\n';
         }
         report << "telemetry_enabled=" << (telemetry_enabled ? 1 : 0) << '\n';
         if (telemetry_enabled) {
-            report << "telemetry_host=" << options.telemetry_host << '\n';
+            report << "telemetry_host="
+                   << visionarm::report::EscapeReportValue(
+                          options.telemetry_host)
+                   << '\n';
             report << "telemetry_port=" << options.telemetry_port << '\n';
             report << "telemetry_interval_ms="
                    << options.telemetry_interval_ms << '\n';
@@ -1730,7 +1938,9 @@ int main(int argc, char** argv) {
             report << "telemetry_start_ok="
                    << (telemetry_start_ok ? 1 : 0) << '\n';
             report << "telemetry_start_error="
-                   << telemetry_start_error << '\n';
+                   << visionarm::report::EscapeReportValue(
+                          telemetry_start_error)
+                   << '\n';
             report << "telemetry_runtime_fault="
                    << (telemetry_runtime_fault ? 1 : 0) << '\n';
             report << "telemetry_final_update_ok="
@@ -1746,7 +1956,9 @@ int main(int argc, char** argv) {
                 report << "telemetry_fatal_error="
                        << (telemetry.fatal_error ? 1 : 0) << '\n';
                 report << "telemetry_last_error="
-                       << telemetry.last_error << '\n';
+                       << visionarm::report::EscapeReportValue(
+                              telemetry.last_error)
+                       << '\n';
                 report << "telemetry_control_updates="
                        << telemetry.control_updates << '\n';
                 report << "telemetry_runtime_updates="
@@ -1884,7 +2096,9 @@ int main(int argc, char** argv) {
             report << "uart.adapter.identity_truncations="
                    << adapter.metrics.identity_truncations << '\n';
             report << "uart.link_state_before_stop="
-                   << visionarm::uart::LinkStateName(link.state) << '\n';
+                   << visionarm::report::EscapeReportValue(
+                          visionarm::uart::LinkStateName(link.state))
+                   << '\n';
             report << "uart.peer_boot_id_valid="
                    << (link.peer_boot_id_valid ? 1 : 0) << '\n';
             report << "uart.peer_boot_id=" << link.peer_boot_id << '\n';
@@ -2197,14 +2411,122 @@ int main(int argc, char** argv) {
             telemetry_ok &&
             queues_ok && timing_ok && rss_ok;
 
-        report << "vision_pipeline_r7_r8_probe="
-               << (passed ? "PASS" : "FAIL") << '\n';
+        report << "control_ok=" << (control_ok ? 1 : 0) << '\n';
 
         encoder.Shutdown();
         engine.Shutdown();
-        return passed ? EXIT_SUCCESS : EXIT_FAILURE;
+        visionarm::logging::Log(
+            passed ? visionarm::logging::LogLevel::INFO
+                   : visionarm::logging::LogLevel::ERROR,
+            "runtime", "shutdown pipeline_result=",
+            (passed ? "PASS" : "FAIL"),
+            " duration_sec=", observed_duration_seconds,
+            " captured_frames=", stats.captured_frames,
+            " inference_successes=", stats.inference_successes,
+            " video_frames_encoded=", stats.video_frames_encoded);
+        const bool logger_flush_ok = visionarm::logging::FlushGlobalLogger();
+        const visionarm::logging::LoggerSnapshot logger_stats =
+            visionarm::logging::GlobalLoggerSnapshot();
+        const bool product_passed =
+            passed && logger_flush_ok &&
+            logger_stats.dropped_critical == 0U &&
+            logger_stats.sink_failures == 0U;
+        report << "log.queue_capacity=" << logger_stats.queue_capacity << '\n';
+        report << "log.critical_queue_capacity="
+               << logger_stats.critical_queue_capacity << '\n';
+        report << "log.current_size=" << logger_stats.current_size << '\n';
+        report << "log.high_watermark=" << logger_stats.high_watermark << '\n';
+        report << "log.accepted=" << logger_stats.accepted << '\n';
+        report << "log.emitted=" << logger_stats.emitted << '\n';
+        report << "log.dropped=" << logger_stats.dropped << '\n';
+        report << "log.dropped_contention="
+               << logger_stats.dropped_contention << '\n';
+        report << "log.dropped_overflow="
+               << logger_stats.dropped_overflow << '\n';
+        report << "log.dropped_critical="
+               << logger_stats.dropped_critical << '\n';
+        report << "log.sink_failures=" << logger_stats.sink_failures << '\n';
+        report << "log.flush_ok=" << (logger_flush_ok ? 1 : 0) << '\n';
+        report << "result=" << (product_passed ? "PASS" : "FAIL") << '\n';
+        report << "vision_pipeline_r7_r8_probe="
+               << (product_passed ? "PASS" : "FAIL") << '\n';
+
+        std::string report_error;
+        const bool report_ok = options.report.empty()
+            ? visionarm::report::WriteRuntimeReport(
+                  diagnostic_report.str(), options.report_level,
+                  std::cout, &report_error)
+            : visionarm::report::WriteRuntimeReportFile(
+                  options.report, diagnostic_report.str(),
+                  options.report_level, &report_error);
+        if (!report_ok) {
+            visionarm::logging::Log(
+                visionarm::logging::LogLevel::FATAL, "report",
+                "report write failed: ", report_error);
+            (void)visionarm::logging::FlushGlobalLogger();
+        }
+        visionarm::logging::ShutdownGlobalLogger();
+        return product_passed && report_ok ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& error) {
-        std::cerr << "fatal: " << error.what() << '\n';
+        visionarm::logging::Log(
+            visionarm::logging::LogLevel::FATAL, "runtime",
+            "fatal startup/runtime exception: ", error.what());
+        (void)visionarm::logging::FlushGlobalLogger();
+        const visionarm::logging::LoggerSnapshot logger_stats =
+            visionarm::logging::GlobalLoggerSnapshot();
+
+        visionarm::report::ReportLevel report_level =
+            visionarm::report::ReportLevel::SUMMARY;
+        std::string report_path = FindOptionValue(argc, argv, "--report");
+        if (options_parsed) {
+            report_path = options.report;
+            report_level = options.report_level;
+        } else {
+            const std::string level_text =
+                FindOptionValue(argc, argv, "--report-level");
+            (void)visionarm::report::ParseReportLevel(
+                level_text, &report_level);
+        }
+
+        std::ostringstream fault;
+        fault << "module.camera.enabled=0\n"
+              << "module.inference.enabled=0\n"
+              << "module.video.enabled=0\n"
+              << "module.audio.enabled=0\n"
+              << "module.audio_encoder.enabled=0\n"
+              << "module.recorder.enabled=0\n"
+              << "module.network.enabled=0\n"
+              << "module.telemetry.enabled=0\n"
+              << "module.uart.enabled=0\n"
+              << "requested_duration_seconds="
+              << (options_parsed ? options.duration_seconds : 0) << '\n'
+              << "observed_duration_seconds=0\n"
+              << "completed_requested_duration=0\n"
+              << "terminated_by_signal=0\n"
+              << "fatal_error=1\n"
+              << "fatal_message="
+              << visionarm::report::EscapeReportValue(error.what()) << '\n'
+              << "graceful_shutdown_completed=0\n"
+              << "log.accepted=" << logger_stats.accepted << '\n'
+              << "log.emitted=" << logger_stats.emitted << '\n'
+              << "log.dropped=" << logger_stats.dropped << '\n'
+              << "log.dropped_critical=" << logger_stats.dropped_critical
+              << '\n'
+              << "log.sink_failures=" << logger_stats.sink_failures << '\n'
+              << "result=FAIL\n";
+        std::string report_error;
+        const bool fault_report_ok = report_path.empty()
+            ? visionarm::report::WriteRuntimeReport(
+                  fault.str(), report_level, std::cout, &report_error)
+            : visionarm::report::WriteRuntimeReportFile(
+                  report_path, fault.str(), report_level, &report_error);
+        if (!fault_report_ok) {
+            visionarm::logging::Log(
+                visionarm::logging::LogLevel::FATAL, "report",
+                "fault report write failed: ", report_error);
+            (void)visionarm::logging::FlushGlobalLogger();
+        }
+        visionarm::logging::ShutdownGlobalLogger();
         return EXIT_FAILURE;
     }
 }

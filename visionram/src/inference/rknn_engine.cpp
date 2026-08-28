@@ -1,10 +1,10 @@
 #include "inference/rknn_engine.h"
 
 #include "common/monotonic_clock.h"
+#include "logging/logger.h"
 
 #include <algorithm>
 #include <fstream>
-#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -472,7 +472,8 @@ bool RknnEngine::RunInputsSet(
         timing->input_submit_ns = MonotonicNowNs() - submit_start;
     }
     if (result != RKNN_SUCC) {
-        std::cerr << "rknn_inputs_set failed, ret=" << result << '\n';
+        logging::Log(logging::LogLevel::ERROR, "rknn",
+                     "rknn_inputs_set failed, ret=", result);
         return false;
     }
 
@@ -482,7 +483,8 @@ bool RknnEngine::RunInputsSet(
         timing->run_ns = MonotonicNowNs() - run_start;
     }
     if (result != RKNN_SUCC) {
-        std::cerr << "rknn_run failed, ret=" << result << '\n';
+        logging::Log(logging::LogLevel::ERROR, "rknn",
+                     "rknn_run failed, ret=", result);
         return false;
     }
 
@@ -503,7 +505,8 @@ bool RknnEngine::RunInputsSet(
         timing->output_get_ns = MonotonicNowNs() - get_start;
     }
     if (result != RKNN_SUCC) {
-        std::cerr << "rknn_outputs_get failed, ret=" << result << '\n';
+        logging::Log(logging::LogLevel::ERROR, "rknn",
+                     "rknn_outputs_get failed, ret=", result);
         return false;
     }
 
@@ -514,12 +517,10 @@ bool RknnEngine::RunInputsSet(
             output_slot.memories[index]->size;
 
         if (logical_bytes == 0U || logical_bytes > capacity) {
-            std::cerr
-                << "invalid RKNN logical output size, index="
-                << index
-                << ", logical_bytes=" << logical_bytes
-                << ", capacity=" << capacity
-                << '\n';
+            logging::Log(logging::LogLevel::ERROR, "rknn",
+                         "invalid RKNN logical output size, index=", index,
+                         ", logical_bytes=", logical_bytes,
+                         ", capacity=", capacity);
             return false;
         }
 
@@ -537,7 +538,8 @@ bool RknnEngine::RunInputsSet(
         timing->output_release_ns = MonotonicNowNs() - release_start;
     }
     if (result != RKNN_SUCC) {
-        std::cerr << "rknn_outputs_release failed, ret=" << result << '\n';
+        logging::Log(logging::LogLevel::ERROR, "rknn",
+                     "rknn_outputs_release failed, ret=", result);
         return false;
     }
     return true;
@@ -558,8 +560,8 @@ bool RknnEngine::BindIo(
         }
         if (result != RKNN_SUCC) {
             bound_input_memory_ = nullptr;
-            std::cerr << "rknn_set_io_mem(input) failed, ret="
-                      << result << '\n';
+            logging::Log(logging::LogLevel::ERROR, "rknn",
+                         "rknn_set_io_mem(input) failed, ret=", result);
             return false;
         }
         bound_input_memory_ = input_slot.memory;
@@ -575,8 +577,9 @@ bool RknnEngine::BindIo(
                 &selected_output_attrs_[index]);
             if (result != RKNN_SUCC) {
                 bound_output_slot_ = nullptr;
-                std::cerr << "rknn_set_io_mem(output " << index
-                          << ") failed, ret=" << result << '\n';
+                logging::Log(logging::LogLevel::ERROR, "rknn",
+                             "rknn_set_io_mem(output ", index,
+                             ") failed, ret=", result);
                 return false;
             }
         }
@@ -601,7 +604,8 @@ bool RknnEngine::RunBoundIo(
         timing->run_ns = MonotonicNowNs() - run_start;
     }
     if (result != RKNN_SUCC) {
-        std::cerr << "rknn_run(bound IO) failed, ret=" << result << '\n';
+        logging::Log(logging::LogLevel::ERROR, "rknn",
+                     "rknn_run(bound IO) failed, ret=", result);
         return false;
     }
     return true;
@@ -647,8 +651,9 @@ void RknnEngine::DestroySlots() noexcept {
             if (memory != nullptr) {
                 const int result = rknn_destroy_mem(context_, memory);
                 if (result != RKNN_SUCC) {
-                    std::cerr << "rknn_destroy_mem(output) failed, ret="
-                              << result << '\n';
+                    logging::Log(logging::LogLevel::ERROR, "rknn",
+                                 "rknn_destroy_mem(output) failed, ret=",
+                                 result);
                 }
                 memory = nullptr;
             }
@@ -658,8 +663,8 @@ void RknnEngine::DestroySlots() noexcept {
         if (slot.memory != nullptr) {
             const int result = rknn_destroy_mem(context_, slot.memory);
             if (result != RKNN_SUCC) {
-                std::cerr << "rknn_destroy_mem(input) failed, ret="
-                          << result << '\n';
+                logging::Log(logging::LogLevel::ERROR, "rknn",
+                             "rknn_destroy_mem(input) failed, ret=", result);
             }
             slot.memory = nullptr;
         }
@@ -677,7 +682,8 @@ void RknnEngine::Shutdown() noexcept {
     if (initialized_ && context_ != 0) {
         const int result = rknn_destroy(context_);
         if (result != RKNN_SUCC) {
-            std::cerr << "rknn_destroy failed, ret=" << result << '\n';
+            logging::Log(logging::LogLevel::ERROR, "rknn",
+                         "rknn_destroy failed, ret=", result);
         }
     }
     context_ = 0;

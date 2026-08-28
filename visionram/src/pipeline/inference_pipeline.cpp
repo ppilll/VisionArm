@@ -2,10 +2,10 @@
 
 #include "camera/dmabuf_cpu_sync.h"
 #include "common/monotonic_clock.h"
+#include "logging/logger.h"
 
 #include <algorithm>
 #include <exception>
-#include <iostream>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -66,7 +66,8 @@ InferencePipeline::~InferencePipeline() {
 
 bool InferencePipeline::Start() {
     if (started_once_) {
-        std::cerr << "InferencePipeline supports one Start/Stop lifecycle\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline",
+                     "InferencePipeline supports one Start/Stop lifecycle");
         return false;
     }
 
@@ -87,15 +88,16 @@ bool InferencePipeline::Start() {
         config_.completed_frame_queue_capacity == 0U ||
         config_.latency_sample_capacity == 0U ||
         broker_->GetSnapshot().closed || !video_dependencies_valid) {
-        std::cerr << "InferencePipeline dependencies/config are invalid\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline",
+                     "InferencePipeline dependencies/config are invalid");
         return false;
     }
 
     if (preprocessor_->destination_access() ==
             PreprocessorDestinationAccess::DMA_DEVICE_WRITE &&
         engine_->io_mode() == RknnIoMode::INPUTS_SET_PREALLOC_OUTPUT) {
-        std::cerr
-            << "RGA/device-written input requires an rknn_set_io_mem mode\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline",
+                     "RGA/device-written input requires an rknn_set_io_mem mode");
         return false;
     }
 
@@ -117,7 +119,8 @@ bool InferencePipeline::Start() {
             video_encoder_->CodecConfigPackets();
         for (const EncodedPacket& header : headers) {
             if (!encoded_packets_.TryPush(header)) {
-                std::cerr << "encoded packet queue cannot hold codec header\n";
+                logging::Log(logging::LogLevel::ERROR, "pipeline.video",
+                             "encoded packet queue cannot hold codec header");
                 return false;
             }
             video_packets_enqueued_count_.fetch_add(
@@ -158,9 +161,11 @@ bool InferencePipeline::Start() {
             std::thread(&InferencePipeline::CaptureLoop, this);
         return true;
     } catch (const std::exception& error) {
-        std::cerr << "pipeline start failed: " << error.what() << '\n';
+        logging::Log(logging::LogLevel::ERROR, "pipeline",
+                     "pipeline start failed: ", error.what());
     } catch (...) {
-        std::cerr << "pipeline start failed with an unknown exception\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline",
+                     "pipeline start failed with an unknown exception");
     }
 
     SignalFailure();
@@ -390,10 +395,12 @@ void InferencePipeline::CaptureLoop() noexcept {
             }
         }
     } catch (const std::exception& error) {
-        std::cerr << "capture thread failed: " << error.what() << '\n';
+        logging::Log(logging::LogLevel::ERROR, "pipeline.capture",
+                     "capture thread failed: ", error.what());
         SignalFailure();
     } catch (...) {
-        std::cerr << "capture thread failed with an unknown exception\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline.capture",
+                     "capture thread failed with an unknown exception");
         SignalFailure();
     }
 
@@ -449,13 +456,15 @@ void InferencePipeline::VideoLoop() noexcept {
             }
         }
     } catch (const std::exception& error) {
-        std::cerr << "video thread failed: " << error.what() << '\n';
+        logging::Log(logging::LogLevel::ERROR, "pipeline.video",
+                     "video thread failed: ", error.what());
         if (source && source->valid()) {
             (void)source->Release(FrameReleaseReason::PROCESSING_ERROR);
         }
         SignalVideoFailure();
     } catch (...) {
-        std::cerr << "video thread failed with an unknown exception\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline.video",
+                     "video thread failed with an unknown exception");
         if (source && source->valid()) {
             (void)source->Release(FrameReleaseReason::PROCESSING_ERROR);
         }
@@ -485,10 +494,12 @@ void InferencePipeline::EncodedPacketLoop() noexcept {
         }
         encoded_packet_sink_->Flush();
     } catch (const std::exception& error) {
-        std::cerr << "encoded packet sink failed: " << error.what() << '\n';
+        logging::Log(logging::LogLevel::ERROR, "pipeline.video_sink",
+                     "encoded packet sink failed: ", error.what());
         SignalVideoFailure();
     } catch (...) {
-        std::cerr << "encoded packet sink failed with unknown exception\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline.video_sink",
+                     "encoded packet sink failed with unknown exception");
         SignalVideoFailure();
     }
 }
@@ -623,14 +634,16 @@ void InferencePipeline::PreprocessLoop() noexcept {
             }
         }
     } catch (const std::exception& error) {
-        std::cerr << "preprocess thread failed: " << error.what() << '\n';
+        logging::Log(logging::LogLevel::ERROR, "pipeline.preprocess",
+                     "preprocess thread failed: ", error.what());
         if (pending.lease && pending.lease->valid()) {
             (void)pending.lease->Release(
                 FrameReleaseReason::PROCESSING_ERROR);
         }
         SignalFailure();
     } catch (...) {
-        std::cerr << "preprocess thread failed with unknown exception\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline.preprocess",
+                     "preprocess thread failed with unknown exception");
         if (pending.lease && pending.lease->valid()) {
             (void)pending.lease->Release(
                 FrameReleaseReason::PROCESSING_ERROR);
@@ -685,10 +698,12 @@ void InferencePipeline::NpuLoop() noexcept {
             }
         }
     } catch (const std::exception& error) {
-        std::cerr << "NPU thread failed: " << error.what() << '\n';
+        logging::Log(logging::LogLevel::ERROR, "pipeline.inference",
+                     "NPU thread failed: ", error.what());
         SignalFailure();
     } catch (...) {
-        std::cerr << "NPU thread failed with unknown exception\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline.inference",
+                     "NPU thread failed with unknown exception");
         SignalFailure();
     }
 
@@ -762,11 +777,13 @@ bool InferencePipeline::ProcessCompletedFrame(
         }
         postprocess_ok = true;
     } catch (const std::exception& error) {
-        std::cerr << "postprocess failed: " << error.what() << '\n';
+        logging::Log(logging::LogLevel::ERROR, "pipeline.postprocess",
+                     "postprocess failed: ", error.what());
         postprocess_failure_count_.fetch_add(
             1U, std::memory_order_relaxed);
     } catch (...) {
-        std::cerr << "postprocess failed with unknown exception\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline.postprocess",
+                     "postprocess failed with unknown exception");
         postprocess_failure_count_.fetch_add(
             1U, std::memory_order_relaxed);
     }
@@ -789,12 +806,14 @@ bool InferencePipeline::ProcessCompletedFrame(
     try {
         result_sink_->Publish(std::move(packet));
     } catch (const std::exception& error) {
-        std::cerr << "result sink failed: " << error.what() << '\n';
+        logging::Log(logging::LogLevel::ERROR, "pipeline.result_sink",
+                     "result sink failed: ", error.what());
         result_publish_failure_count_.fetch_add(
             1U, std::memory_order_relaxed);
         return false;
     } catch (...) {
-        std::cerr << "result sink failed with unknown exception\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline.result_sink",
+                     "result sink failed with unknown exception");
         result_publish_failure_count_.fetch_add(
             1U, std::memory_order_relaxed);
         return false;
@@ -812,10 +831,12 @@ void InferencePipeline::PostprocessLoop() noexcept {
             completed_frames_.Snapshot().current_size == 0U,
             std::memory_order_release);
     } catch (const std::exception& error) {
-        std::cerr << "postprocess thread failed: " << error.what() << '\n';
+        logging::Log(logging::LogLevel::ERROR, "pipeline.postprocess",
+                     "postprocess thread failed: ", error.what());
         SignalFailure();
     } catch (...) {
-        std::cerr << "postprocess thread failed with unknown exception\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline.postprocess",
+                     "postprocess thread failed with unknown exception");
         SignalFailure();
     }
 }
@@ -852,11 +873,12 @@ void InferencePipeline::NpuPostprocessLoop() noexcept {
             (void)ProcessCompletedFrame(&completed);
         }
     } catch (const std::exception& error) {
-        std::cerr << "fused NPU/postprocess thread failed: "
-                  << error.what() << '\n';
+        logging::Log(logging::LogLevel::ERROR, "pipeline.inference",
+                     "fused NPU/postprocess thread failed: ", error.what());
         SignalFailure();
     } catch (...) {
-        std::cerr << "fused NPU/postprocess thread failed\n";
+        logging::Log(logging::LogLevel::ERROR, "pipeline.inference",
+                     "fused NPU/postprocess thread failed");
         SignalFailure();
     }
 }
