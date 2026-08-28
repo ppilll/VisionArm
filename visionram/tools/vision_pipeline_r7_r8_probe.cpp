@@ -802,6 +802,26 @@ bool QueueBounded(const visionarm::QueueStatsSnapshot& value) noexcept {
         value.current_size <= value.capacity;
 }
 
+bool QueueDrained(
+    const visionarm::QueueStatsSnapshot& value) noexcept {
+    return QueueBounded(value) && value.stopped && value.current_size == 0U &&
+        value.pushed == value.popped + value.replaced_oldest &&
+        value.replaced_oldest == 0U;
+}
+
+double RatePerSecond(std::uint64_t count, double seconds) noexcept {
+    return seconds > 0.0 ? static_cast<double>(count) / seconds : 0.0;
+}
+
+bool LatencyComplete(
+    const visionarm::LatencyDistributionSnapshot& value,
+    std::uint64_t expected_samples) noexcept {
+    return expected_samples > 0U &&
+        value.total_samples == expected_samples &&
+        value.retained_samples == value.total_samples &&
+        !value.truncated;
+}
+
 #if defined(VISIONARM_HAS_AV_MUX) || defined(VISIONARM_HAS_NETWORK_MUX)
 class FanoutEncodedVideoSink final : public visionarm::IEncodedPacketSink {
 public:
@@ -1691,6 +1711,18 @@ int main(int argc, char** argv) {
                << options.duration_seconds << '\n';
         report << "observed_duration_seconds="
                << observed_duration_seconds << '\n';
+        report << "camera_fps="
+               << RatePerSecond(stats.captured_frames,
+                                observed_duration_seconds) << '\n';
+        report << "inference_fps="
+               << RatePerSecond(stats.inference_successes,
+                                observed_duration_seconds) << '\n';
+        report << "postprocess_fps="
+               << RatePerSecond(stats.postprocess_successes,
+                                observed_duration_seconds) << '\n';
+        report << "video_fps="
+               << RatePerSecond(stats.video_frames_encoded,
+                                observed_duration_seconds) << '\n';
         report << "completed_requested_duration="
                << (completed_requested_duration ? 1 : 0) << '\n';
         report << "terminated_by_signal="
@@ -1726,6 +1758,9 @@ int main(int argc, char** argv) {
             report << "audio_timed_chunks=" << audio.timed_chunks << '\n';
             report << "audio_timed_frames=" << audio.timed_frames << '\n';
             report << "audio_timed_bytes=" << audio.timed_bytes << '\n';
+            report << "audio_observed_rate_hz="
+                   << RatePerSecond(audio.timed_frames,
+                                    observed_duration_seconds) << '\n';
             report << "audio_queue_push_failures="
                    << audio.queue_push_failures << '\n';
             report << "audio_xruns=" << audio.capture.xrun_count << '\n';
@@ -2188,16 +2223,55 @@ int main(int argc, char** argv) {
         const bool rss_ok = options.max_rss_growth_kb == 0 ||
             rss.GrowthKb() <= options.max_rss_growth_kb;
         const bool timing_ok =
-            stats.timing.capture_to_result.total_samples > 0U &&
-            stats.timing.result_age.total_samples > 0U &&
-            !stats.timing.capture_to_result.truncated &&
-            !stats.timing.result_age.truncated;
+            LatencyComplete(stats.timing.input_slot_wait,
+                            stats.inference_successes) &&
+            LatencyComplete(stats.timing.latest_frame_queue_wait,
+                            stats.inference_successes) &&
+            LatencyComplete(stats.timing.capture_to_preprocess_start,
+                            stats.inference_successes) &&
+            LatencyComplete(stats.timing.preprocess,
+                            stats.inference_successes) &&
+            LatencyComplete(stats.timing.rknn_input_submit,
+                            stats.inference_successes) &&
+            LatencyComplete(stats.timing.rknn_output_bind,
+                            stats.inference_successes) &&
+            LatencyComplete(stats.timing.rknn_bind_total,
+                            stats.inference_successes) &&
+            LatencyComplete(stats.timing.rknn_run,
+                            stats.inference_successes) &&
+            LatencyComplete(stats.timing.rknn_output_get,
+                            stats.inference_successes) &&
+            LatencyComplete(stats.timing.rknn_output_release,
+                            stats.inference_successes) &&
+            LatencyComplete(stats.timing.rknn_total,
+                            stats.inference_successes) &&
+            LatencyComplete(stats.timing.postprocess,
+                            stats.postprocess_successes) &&
+            LatencyComplete(stats.timing.capture_to_result,
+                            stats.postprocess_successes) &&
+            LatencyComplete(stats.timing.result_age,
+                            stats.postprocess_successes);
+        const bool completed_queue_ok =
+            stats.topology ==
+                visionarm::InferenceThreadTopology::FUSED_NPU_POSTPROCESS ||
+            QueueDrained(stats.completed_frame_queue);
         const bool queues_ok =
-            QueueBounded(stats.captured_frame_queue) &&
-            QueueBounded(stats.prepared_frame_queue) &&
-            QueueBounded(stats.completed_frame_queue) &&
-            QueueBounded(stats.video_frame_queue) &&
-            QueueBounded(stats.encoded_packet_queue);
+            QueueDrained(stats.captured_frame_queue) &&
+            QueueDrained(stats.prepared_frame_queue) &&
+            completed_queue_ok &&
+            QueueDrained(stats.video_frame_queue) &&
+            QueueDrained(stats.encoded_packet_queue);
+        const bool throughput_ok =
+            stats.camera_timeouts == 0U &&
+            stats.driver_dropped_frames == 0U &&
+            stats.replaced_waiting_frames == 0U &&
+            stats.skipped_no_input_slot == 0U &&
+            stats.captured_frames == stats.inference_successes &&
+            stats.inference_successes == stats.postprocess_successes &&
+            stats.captured_frames == stats.video_frames_encoded &&
+            rga_stats.process_calls == rga_stats.process_successes &&
+            rga_stats.process_successes == stats.inference_successes &&
+            encoder_stats.encoded_frames == stats.video_frames_encoded;
 
         bool audio_ok = true;
 #if defined(VISIONARM_HAS_ALSA_AUDIO)
@@ -2211,14 +2285,36 @@ int main(int argc, char** argv) {
                 audio_worker_stats->queue_push_failures == 0U &&
                 audio_worker_stats->capture.xrun_count == 0U &&
                 audio_worker_stats->capture.suspend_count == 0U &&
+                audio_worker_stats->capture.recovery_count == 0U &&
+                audio_worker_stats->capture.short_read_count == 0U &&
                 audio_worker_stats->capture.status_error_count == 0U &&
-                QueueBounded(audio_queue_stats) &&
-                audio_queue_stats.replaced_oldest == 0U &&
-                audio_timeline_stats.chunks > 0U &&
+                QueueDrained(audio_queue_stats) &&
+                audio_timeline_stats.chunks ==
+                    audio_worker_stats->timed_chunks &&
+                audio_timeline_stats.frames ==
+                    audio_worker_stats->timed_frames &&
+                audio_timeline_stats.bytes ==
+                    audio_worker_stats->timed_bytes &&
+                audio_worker_stats->timed_bytes ==
+                    audio_worker_stats->timed_frames *
+                    audio_worker_stats->capture_info.format.channels * 2U &&
+                audio_timeline_stats.reanchors > 0U &&
+                audio_timeline_stats.discontinuities == 0U &&
                 audio_timeline_stats.pts_regressions == 0U &&
                 audio_timeline_stats.continuous_pts_mismatches == 0U &&
+                audio_timeline_stats.maximum_forward_gap_ns == 0 &&
+                audio_timeline_stats.first_pts_ns <
+                    audio_timeline_stats.last_pts_ns &&
+                audio_timeline_stats.last_pts_ns <
+                    audio_timeline_stats.last_end_pts_ns &&
                 media_clock_stats.audio_anchor_valid &&
-                media_clock_stats.audio_chunks_stamped > 0U &&
+                (media_clock_stats.audio_chunks_stamped ==
+                     audio_worker_stats->timed_chunks ||
+                 media_clock_stats.audio_chunks_stamped ==
+                     audio_worker_stats->timed_chunks + 1U) &&
+                media_clock_stats.audio_reanchors ==
+                    audio_timeline_stats.reanchors &&
+                media_clock_stats.audio_discontinuities == 0U &&
                 media_clock_stats.audio_timestamp_failures == 0U;
         }
 #endif
@@ -2233,26 +2329,28 @@ int main(int argc, char** argv) {
                 audio_encode_stats->started &&
                 !audio_encode_stats->fatal_error &&
                 audio_encode_stats->chunks_consumed > 0U &&
+                audio_encode_stats->chunks_consumed ==
+                    audio_timeline_stats.chunks &&
                 audio_encode_stats->packets_pushed > 0U &&
                 audio_encode_stats->queue_push_failures == 0U &&
                 audio_encode_stats->encoder.input_frames ==
                     audio_timeline_stats.frames &&
                 audio_encode_stats->encoder.emitted_packets ==
                     audio_encode_stats->packets_pushed &&
+                audio_encode_stats->encoder.emitted_bytes ==
+                    audio_encode_stats->bytes_pushed &&
                 audio_encode_stats->encoder.encode_failures == 0U &&
                 audio_encode_stats->encoder.buffered_input_frames == 0U &&
                 audio_encode_stats->encoder.drained &&
-                QueueBounded(audio_encoded_queue_stats) &&
-                audio_encoded_queue_stats.replaced_oldest == 0U &&
-                audio_encoded_queue_stats.current_size == 0U &&
-                audio_encoded_queue_stats.pushed ==
-                    audio_encoded_queue_stats.popped &&
+                QueueDrained(audio_encoded_queue_stats) &&
                 audio_sink_stats.has_value() &&
                 audio_sink_stats->started &&
                 !audio_sink_stats->fatal_error &&
                 audio_sink_stats->sink_failures == 0U &&
                 audio_sink_stats->packets_written ==
-                    audio_encode_stats->packets_pushed;
+                    audio_encode_stats->packets_pushed &&
+                audio_sink_stats->bytes_written ==
+                    audio_encode_stats->bytes_pushed;
         }
 #endif
 
@@ -2266,12 +2364,20 @@ int main(int argc, char** argv) {
                 !av_mux_stats->fatal_error &&
                 av_mux_stats->write_failures == 0U &&
                 av_mux_stats->video_samples_written > 0U &&
+                av_mux_stats->video_fragments_received ==
+                    stats.video_frames_encoded &&
                 av_mux_stats->video_samples_written ==
                     stats.video_frames_encoded &&
                 av_mux_stats->audio_packets_written > 0U &&
                 audio_sink_stats.has_value() &&
                 av_mux_stats->audio_packets_written ==
-                    audio_sink_stats->packets_written;
+                    audio_sink_stats->packets_written &&
+                av_mux_stats->audio_bytes_written ==
+                    audio_sink_stats->bytes_written &&
+                av_mux_stats->first_video_pts_us <
+                    av_mux_stats->last_video_pts_us &&
+                av_mux_stats->first_audio_pts_ns <
+                    av_mux_stats->last_audio_pts_ns;
         }
 #endif
         report << "audio_encode_path_ok=" << (audio_encode_ok ? 1 : 0) << '\n';
@@ -2288,6 +2394,8 @@ int main(int argc, char** argv) {
                 !network_mux_stats->fatal_error &&
                 network_mux_stats->queue_overload_failures == 0U &&
                 network_mux_stats->write_failures == 0U &&
+                network_mux_stats->video_fragments_received ==
+                    stats.video_frames_encoded &&
                 network_mux_stats->video_access_units_enqueued > 0U &&
                 network_mux_stats->video_access_units_enqueued ==
                     stats.video_frames_encoded &&
@@ -2299,11 +2407,13 @@ int main(int argc, char** argv) {
                     audio_sink_stats->packets_written &&
                 network_mux_stats->audio_packets_written ==
                     network_mux_stats->audio_packets_enqueued &&
-                QueueBounded(network_mux_stats->packet_queue) &&
-                network_mux_stats->packet_queue.replaced_oldest == 0U &&
-                network_mux_stats->packet_queue.current_size == 0U &&
-                network_mux_stats->packet_queue.pushed ==
-                    network_mux_stats->packet_queue.popped;
+                network_mux_stats->audio_bytes_written ==
+                    audio_sink_stats->bytes_written &&
+                network_mux_stats->first_video_pts_us <
+                    network_mux_stats->last_video_pts_us &&
+                network_mux_stats->first_audio_pts_ns <
+                    network_mux_stats->last_audio_pts_ns &&
+                QueueDrained(network_mux_stats->packet_queue);
         }
 #endif
         report << "network_mux_ok=" << (network_mux_ok ? 1 : 0) << '\n';
@@ -2325,6 +2435,8 @@ int main(int argc, char** argv) {
                 telemetry_stats->datagrams_attempted > 0U &&
                 telemetry_stats->datagrams_attempted ==
                     telemetry_stats->datagrams_sent &&
+                telemetry_stats->final_sequence ==
+                    telemetry_stats->datagrams_attempted &&
                 telemetry_stats->bytes_sent > 0U &&
                 telemetry_stats->send_failures == 0U &&
                 telemetry_stats->serialization_failures == 0U &&
@@ -2349,11 +2461,29 @@ int main(int argc, char** argv) {
                 adapter.metrics.submissions == state_stats.processed_packets &&
                 adapter.metrics.accepted == adapter.metrics.submissions &&
                 adapter.metrics.rejected == 0U &&
+                adapter.metrics.accepted ==
+                    adapter.metrics.valid_inputs +
+                        adapter.metrics.invalid_inputs &&
+                adapter.metrics.valid_inputs ==
+                    state_stats.valid_controls &&
+                adapter.metrics.nonfinite_invalidations == 0U &&
+                adapter.metrics.invalid_timestamp_invalidations == 0U &&
+                adapter.metrics.invalid_state_invalidations == 0U &&
+                adapter.metrics.identity_truncations == 0U &&
                 link_state_ok &&
                 link.peer_boot_id_valid &&
+                link.metrics.tx_bytes > 0U &&
+                link.metrics.rx_bytes > 0U &&
+                link.metrics.control_accepted == adapter.metrics.accepted &&
+                link.metrics.control_accepted ==
+                    link.metrics.control_overwritten +
+                        link.metrics.control_sent &&
                 link.metrics.hello_ack_received > 0U &&
                 link.metrics.status_received > 0U &&
                 link.metrics.control_sent > 0U &&
+                link.metrics.control_sent ==
+                    link.metrics.valid_control_sent +
+                        link.metrics.invalid_control_sent &&
                 link.metrics.poll_errors == 0U &&
                 link.metrics.read_errors == 0U &&
                 link.metrics.write_errors == 0U &&
@@ -2409,7 +2539,7 @@ int main(int argc, char** argv) {
             local_av_mux_ok &&
             network_mux_ok &&
             telemetry_ok &&
-            queues_ok && timing_ok && rss_ok;
+            queues_ok && throughput_ok && timing_ok && rss_ok;
 
         report << "control_ok=" << (control_ok ? 1 : 0) << '\n';
 
@@ -2429,6 +2559,14 @@ int main(int argc, char** argv) {
             visionarm::logging::GlobalLoggerSnapshot();
         const bool product_passed =
             passed && logger_flush_ok &&
+            logger_stats.current_size == 0U &&
+            logger_stats.emitted == logger_stats.accepted &&
+            logger_stats.dropped ==
+                logger_stats.dropped_contention +
+                    logger_stats.dropped_overflow &&
+            logger_stats.high_watermark <=
+                logger_stats.queue_capacity +
+                    logger_stats.critical_queue_capacity &&
             logger_stats.dropped_critical == 0U &&
             logger_stats.sink_failures == 0U;
         report << "log.queue_capacity=" << logger_stats.queue_capacity << '\n';

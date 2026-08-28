@@ -19,7 +19,7 @@ bool HasLine(const std::string& report, const std::string& line) {
     return report.find(line + '\n') != std::string::npos;
 }
 
-std::string Fixture(bool audio_enabled) {
+std::string Fixture(bool audio_enabled, bool split_topology = false) {
     return
         "module.camera.enabled=1\n"
         "module.inference.enabled=1\n"
@@ -30,6 +30,23 @@ std::string Fixture(bool audio_enabled) {
         "module.network.enabled=0\n"
         "module.telemetry.enabled=0\n"
         "module.uart.enabled=0\n"
+        "topology=" + std::string(
+            split_topology ? "split_npu_postprocess\n"
+                           : "fused_npu_postprocess\n") +
+        "queue.completed.capacity=1\n"
+        "queue.completed.high_watermark=0\n"
+        "queue.completed.current_size=0\n"
+        "queue.completed.pushed=0\n"
+        "queue.completed.popped=0\n"
+        "queue.completed.replaced_oldest=0\n"
+        "queue.completed.stopped=1\n"
+        "queue.captured.capacity=1\n"
+        "queue.captured.high_watermark=1\n"
+        "queue.captured.current_size=0\n"
+        "queue.captured.pushed=10\n"
+        "queue.captured.popped=10\n"
+        "queue.captured.replaced_oldest=0\n"
+        "queue.captured.stopped=1\n"
         "requested_duration_seconds=600\n"
         "observed_duration_seconds=600.030\n"
         "completed_requested_duration=1\n"
@@ -69,6 +86,12 @@ void TestLevelsAndModuleFiltering() {
             "summary level must be explicit");
     Require(HasLine(summary, "result=PASS"),
             "summary must carry the final result");
+    Require(HasLine(summary, "queue.captured.current_size=0"),
+            "summary must expose queue drain state");
+    Require(HasLine(summary, "queue.captured.stopped=1"),
+            "summary must expose queue stop state");
+    Require(!HasLine(summary, "queue.captured.capacity=1"),
+            "summary must omit detailed queue capacity");
     Require(!HasLine(summary, "latency.capture_to_result.p99_ms=86.305"),
             "summary must omit performance latency");
     Require(HasLine(performance,
@@ -78,6 +101,15 @@ void TestLevelsAndModuleFiltering() {
             "performance must omit diagnostic configuration");
     Require(HasLine(diagnostic, "camera_requested_width=1920"),
             "diagnostic must include configuration");
+    Require(!HasLine(performance, "queue.completed.capacity=1"),
+            "fused performance report must omit the unused completed queue");
+    Require(!HasLine(diagnostic, "queue.completed.capacity=1"),
+            "fused diagnostic report must omit the unused completed queue");
+
+    const std::string split = Render(
+        Fixture(true, true), visionarm::report::ReportLevel::PERFORMANCE);
+    Require(HasLine(split, "queue.completed.capacity=1"),
+            "split report must retain the active completed queue");
 
     const std::string audio_disabled = Render(
         Fixture(false), visionarm::report::ReportLevel::DIAGNOSTIC);

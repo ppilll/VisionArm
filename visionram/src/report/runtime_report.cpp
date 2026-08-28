@@ -42,6 +42,11 @@ bool StartsWith(std::string_view value, std::string_view prefix) noexcept {
            value.substr(0U, prefix.size()) == prefix;
 }
 
+bool EndsWith(std::string_view value, std::string_view suffix) noexcept {
+    return value.size() >= suffix.size() &&
+           value.substr(value.size() - suffix.size()) == suffix;
+}
+
 bool Contains(std::string_view value, std::string_view fragment) noexcept {
     return value.find(fragment) != std::string_view::npos;
 }
@@ -150,7 +155,9 @@ bool IsDisabledModuleField(
         return true;
     }
     const auto topology = values.find("topology");
-    if (topology != values.end() && topology->second == "fused" &&
+    if (topology != values.end() &&
+        (topology->second == "fused_npu_postprocess" ||
+         topology->second == "fused") &&
         StartsWith(key, "queue.completed")) {
         return true;
     }
@@ -159,6 +166,12 @@ bool IsDisabledModuleField(
 
 bool IsSummaryField(std::string_view key) noexcept {
     if (StartsWith(key, "module.") || StartsWith(key, "log.")) return true;
+    if (StartsWith(key, "queue.") &&
+        (EndsWith(key, ".current_size") ||
+         EndsWith(key, ".replaced_oldest") ||
+         EndsWith(key, ".stopped"))) {
+        return true;
+    }
     if (key == "topology" || key == "requested_duration_seconds" ||
         key == "observed_duration_seconds" || key == "control_backend" ||
         key == "captured_frames" || key == "inference_successes" ||
