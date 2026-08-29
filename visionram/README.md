@@ -46,40 +46,23 @@ mock backend for host-oriented checks. Feature switches in
 
 ## Build
 
-Configure with the board toolchain/sysroot and the vendor include/library
-paths. A full board build normally enables the media features required by the
-deployment:
+The canonical build entry point cross-builds the only product executable,
+`visionarm_runtime`, into `build/rk3588/bin`:
 
 ```sh
-cmake -S . -B build-board \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DRKNN_INCLUDE_DIR=/path/to/rknn/include \
-  -DRKNN_LIBRARY=/path/to/librknnrt.so \
-  -DVISIONARM_ENABLE_RGA_PREPROCESS=ON \
-  -DVISIONARM_ENABLE_MPP_VIDEO=ON \
-  -DVISIONARM_ENABLE_ALSA_AUDIO=ON \
-  -DVISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER=ON \
-  -DVISIONARM_ENABLE_FFMPEG_MP4_MUX=ON \
-  -DVISIONARM_ENABLE_FFMPEG_MPEGTS_NETWORK=ON \
-  -DVISIONARM_ENABLE_UART_CONTROL=ON
-cmake --build build-board --target visionarm_runtime -j
+./build.sh
 ```
 
-For host-side regression builds, disable board-only runtime features and keep
-tests enabled. This verifies contracts but does not replace a board build or
-an end-to-end hardware run.
+Use `--clean`, `--debug`, `--jobs N`, `--no-copy`, or `--copy-dir PATH` as
+needed. The script accepts `VISIONARM_TOOLCHAIN_ENV`, `VISIONARM_SDK`,
+`VISIONARM_SYSROOT`, and `VISIONARM_COPY_DIR` environment overrides. It enables
+the board product features and passes the RKNN, RGA, MPP, ALSA, and FFmpeg
+locations to CMake once; there are no test, tool, probe, or benchmark targets.
 
-```sh
-cmake -S . -B build-host \
-  -DVISIONARM_BUILD_RUNTIME=OFF \
-  -DVISIONARM_BUILD_CAPTURE_TOOLS=OFF \
-  -DVISIONARM_BUILD_ACCELERATION_TOOLS=OFF \
-  -DVISIONARM_ENABLE_ALSA_AUDIO=OFF \
-  -DVISIONARM_BUILD_TESTS=ON
-cmake --build build-host -j
-ctest --test-dir build-host --output-on-failure
-python3 -m unittest discover -s tests -p '*_test.py'
-```
+The product feature switches are documented by their descriptions in
+[`cmake/Options.cmake`](cmake/Options.cmake). The final target graph and
+canonical source layout are summarized in
+[`doc/README_STRUCTURE.md`](doc/README_STRUCTURE.md).
 
 ## Board runtime
 
@@ -90,8 +73,12 @@ enabled media/control destinations:
 ```sh
 ./visionarm_runtime \
   --device /dev/videoX \
+  --sensor-subdev /dev/v4l-subdevX \
   --model /path/to/model.rknn \
+  --output /tmp/visionarm.h265 \
   --report /tmp/visionarm.report.txt \
+  --width 1920 --height 1080 --fps 30 \
+  --bitrate 4000000 --gop 60 \
   --network-url 'udp://HOST_IP:5000' \
   --telemetry-host HOST_IP --telemetry-port 5001 \
   --control-backend uart --uart-device /dev/ttyS3
@@ -120,30 +107,18 @@ To capture telemetry alone:
 python3 host/telemetry.py telemetry.jsonl 60 5001 --bind 0.0.0.0
 ```
 
-`tools/validation/mpegts_continuity.py` can validate a captured raw MPEG-TS
-file, and `tools/validation/runtime_report.py` validates a final runtime
-report.
-
 ## Runtime report
 
 The report schema is `visionarm.runtime_report.v1`. The primary completion
 field is `result=PASS` or `result=FAIL`; consumers should not infer result
 from file names or historical aliases.
 
-Validate a full-duration report with explicit enabled-module expectations:
-
-```sh
-python3 tools/validation/runtime_report.py /tmp/visionarm.report.txt \
-  --minimum-duration-seconds 600 \
-  --expect-audio enabled \
-  --expect-network enabled \
-  --expect-recording enabled \
-  --expect-telemetry enabled \
-  --expect-control uart
-```
-
-The validator checks queue draining, broker/camera resource return, media-clock
-continuity, telemetry health, mux/network finalization, and control counters.
+For the final 600-second board acceptance, retain the report, runtime logs,
+raw H.265 output, optional MP4 output, and host telemetry summary. A passing
+run must report drained queues, zero broker/camera outstanding resources, no
+requeue or DMA-BUF synchronization failures, continuous monotonic A/V timing,
+successful mux/network finalization, isolated telemetry health, and the
+expected UART/control counters.
 
 ## Troubleshooting
 

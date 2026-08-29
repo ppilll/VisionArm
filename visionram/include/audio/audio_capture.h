@@ -22,7 +22,7 @@ struct AlsaCaptureConfig {
     std::uint32_t period_frames = 1'024U;
     std::uint32_t buffer_frames = 4'096U;
 
-    // V8.3 product path should not silently run with a different rate/channel/
+    // The product path should not silently run with a different rate/channel/
     // period/buffer than the media pipeline was configured for.
     bool require_exact_hw_params = true;
 };
@@ -56,7 +56,7 @@ struct AlsaCaptureSnapshot {
 // - Read() owns no Camera/DMA-BUF resources. RawAudioChunk owns its PCM bytes.
 //
 // Timestamp contract:
-// - CLOCK_MONOTONIC is mandatory for V8.3.
+// - CLOCK_MONOTONIC is mandatory.
 // - Read() does not assign media PTS. It exports sample-frame indices and ALSA
 //   timing evidence for the later MediaClock stage.
 class AlsaCapture final {

@@ -307,7 +307,7 @@ struct PipelineStatsSnapshot {
     PipelineTimingSnapshot timing;
 };
 
-// Cheap live counters for V8.5 status publishing. Unlike stats(), reading
+// Cheap live counters for status publishing. Unlike stats(), reading
 // this snapshot never copies/sorts latency samples or touches frame buffers.
 struct PipelineRuntimeCounters {
     std::uint64_t captured_frames = 0U;

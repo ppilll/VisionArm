@@ -720,8 +720,6 @@ void V4L2Camera::Stop() noexcept {
 
 }  // namespace visionarm
 
-#include "camera/v4l2_sensor_controller.h"
-
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>

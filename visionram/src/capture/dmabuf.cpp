@@ -180,8 +180,6 @@ bool DmabufCpuAccessGuard::End(
 
 }  // namespace visionarm
 
-#include "camera/v4l2_dmabuf_contract.h"
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>

@@ -1,5 +1,4 @@
 add_library(visionarm_capture STATIC
-    ${PROJECT_SOURCE_DIR}/src/common/monotonic_clock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/capture_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dmabuf.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/v4l2_camera.cpp)

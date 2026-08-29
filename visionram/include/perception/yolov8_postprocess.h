@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../common/pipeline_types.h"
-#include "../common/tensor_view.h"
+#include "common/pipeline_types.h"
+#include "common/tensor_view.h"
 
 #include <vector>
 

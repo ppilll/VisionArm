@@ -1,8 +1,7 @@
 #pragma once
 
-#include "audio/encoded_audio_packet.h"
-#include "audio/encoded_audio_packet_sink.h"
-#include "video/encoded_packet_sink.h"
+#include "audio/audio_types.h"
+#include "video/video_types.h"
 
 #include <cstdint>
 #include <memory>

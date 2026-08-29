@@ -37,7 +37,7 @@ struct AudioEncoderSnapshot {
     std::string last_error;
 };
 
-// FFmpeg 4.4 native AAC-LC encoder for the V8.3 TimedAudioChunk contract.
+// FFmpeg 4.4 native AAC-LC encoder for the TimedAudioChunk contract.
 //
 // The public header intentionally exposes no libavcodec types. This keeps the
 // rest of the product graph independent from FFmpeg ABI details and gives the

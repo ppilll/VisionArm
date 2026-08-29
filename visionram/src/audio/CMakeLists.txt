@@ -8,9 +8,6 @@ if(VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER)
         PRIVATE ${FFMPEG_AVCODEC_LIBRARY} ${FFMPEG_AVUTIL_LIBRARY})
     visionarm_apply_warnings(visionarm_audio_encoder)
 
-    add_executable(audio_encode_probe ${PROJECT_SOURCE_DIR}/tools/audio_encode_probe.cpp)
-    target_link_libraries(audio_encode_probe PRIVATE visionarm::audio_encoder)
-    visionarm_apply_warnings(audio_encode_probe)
 endif()
 
 if(VISIONARM_ENABLE_ALSA_AUDIO)

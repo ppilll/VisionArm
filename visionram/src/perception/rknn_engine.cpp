@@ -1,7 +1,7 @@
 #include "perception/rknn_engine.h"
 
 #include "common/monotonic_clock.h"
-#include "logging/logger.h"
+#include "observability/logger.h"
 
 #include <algorithm>
 #include <fstream>
@@ -271,7 +271,7 @@ void RknnEngine::ConfigureInputContract() {
             native_shape.channels == input_shape_.channels;
         if (!native_direct_input_supported_) {
             throw std::runtime_error(
-                "native input is not RGA-compatible NHWC UINT8 RGB");
+                "native input is unsupported by the RGA NHWC UINT8 RGB path");
         }
         selected_input_attr_.pass_through = 1U;
         input_allocation_bytes_ = std::max(

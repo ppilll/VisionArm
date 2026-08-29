@@ -1,6 +1,6 @@
 #pragma once
 
-#include "camera/capture_buffer_contract.h"
+#include "camera/capture_buffer.h"
 
 #include <cstddef>
 

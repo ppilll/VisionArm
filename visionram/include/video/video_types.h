@@ -1,6 +1,6 @@
 #pragma once
 
-#include "camera/capture_buffer_contract.h"
+#include "camera/capture_buffer.h"
 #include "common/pipeline_types.h"
 
 #include <cstdint>
@@ -11,7 +11,7 @@ namespace visionarm {
 struct EncodedPacket {
     FrameIdentity identity;
 
-    // V8.3 media PTS in microseconds from the common monotonic media epoch.
+    // Media PTS in microseconds from the common monotonic media epoch.
     // The original absolute capture timestamp remains in identity.
     int64_t pts_us = 0;
     int64_t dts_us = 0;

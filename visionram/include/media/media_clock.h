@@ -1,6 +1,6 @@
 #pragma once
 
-#include "audio/audio_chunk.h"
+#include "audio/audio_types.h"
 
 #include <cstdint>
 #include <mutex>
@@ -54,7 +54,7 @@ struct MediaClockSnapshot {
     std::int64_t last_audio_end_pts_ns = 0;
 };
 
-// Common CLOCK_MONOTONIC based timeline for V8.3.
+// Common CLOCK_MONOTONIC-based media timeline.
 //
 // Video contract:
 //   video_pts_ns = v4l2_capture_monotonic_ns - media_epoch_monotonic_ns

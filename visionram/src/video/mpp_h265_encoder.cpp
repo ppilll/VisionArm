@@ -2,7 +2,7 @@
 
 #include "video/mpp_h265_encoder.h"
 
-#include "logging/logger.h"
+#include "observability/logger.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -99,9 +99,9 @@ void MppH265Encoder::Initialize(const MppH265EncoderConfig& config) {
         config.max_source_buffers == 0U) {
         throw std::invalid_argument("invalid MPP H.265 encoder config");
     }
-    // The frozen V8.1 sensor capability matrix contains integer frame rates
+    // The frozen sensor capability matrix contains integer frame rates
     // only (30/60/90 fps), so the media-side configured FPS denominator is 1.
-    // Do not probe vendor-specific MppEncCfg key spellings at runtime: some
+    // Do not try vendor-specific MppEncCfg key spellings at runtime: some
     // vendor librockchip_mpp builds do not safely tolerate unknown keys.
     // MPP_ENC_GET_CFG initializes both FPS denominators to the runtime default
     // (1 on supported Rockchip MPP releases), therefore only the numerator

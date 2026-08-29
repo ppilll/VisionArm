@@ -1,9 +1,8 @@
 #pragma once
 
-#include "audio/encoded_audio_packet.h"
-#include "audio/encoded_audio_packet_sink.h"
+#include "audio/audio_types.h"
 #include "common/pipeline_types.h"
-#include "video/encoded_packet_sink.h"
+#include "video/video_types.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -35,7 +34,7 @@ struct FfmpegMpegTsUdpSinkConfig {
     // Pace UDP output instead of emitting each encoded access unit as a burst.
     // 1316 bytes carries exactly seven 188-byte MPEG-TS packets and remains
     // below the normal Ethernet MTU. udp_bit_rate_bps must cover encoded A/V
-    // plus MPEG-TS overhead; the integration probe derives a 20% headroom
+    // plus MPEG-TS overhead; the runtime derives a 20% headroom
     // value by default.
     std::int32_t udp_packet_size = 1'316;
     std::int32_t udp_send_buffer_bytes = 4 * 1'024 * 1'024;
@@ -71,7 +70,7 @@ struct FfmpegMpegTsUdpSinkSnapshot {
     std::int64_t last_audio_pts_ns = -1;
 };
 
-// Asynchronous MPEG-TS/UDP sink for the V8.4 LAN return path.
+// Asynchronous MPEG-TS/UDP sink for the LAN return path.
 //
 // Write()/WriteAudio() only copy application-owned encoded bytes into a
 // bounded queue. A single worker owns libavformat and all network I/O. Queue

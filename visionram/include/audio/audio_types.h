@@ -35,7 +35,7 @@ struct AudioStreamFormat {
 
 // Timing evidence attached to one ALSA PCM read.
 //
-// IMPORTANT V8.3 CONTRACT:
+// IMPORTANT AUDIO TIMELINE CONTRACT:
 // - first_sample_frame_index is the cumulative ALSA PCM frame index maintained
 //   by this producer. A PCM frame contains one sample for every channel.
 // - alsa_status_mono_ns is snd_pcm_status_get_htstamp() converted to ns. ALSA

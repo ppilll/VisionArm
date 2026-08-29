@@ -1,7 +1,6 @@
 #pragma once
 
-#include "video/nv12_mpp_layout.h"
-#include "video/video_encoder.h"
+#include "video/video_support.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -18,14 +17,14 @@ struct MppH265EncoderConfig {
     int height = 0;
     int horizontal_stride = 0;
 
-    // Must come from the frozen R2 Camera layout. The board probe derives it
-    // from the negotiated stride/size_image and passes it explicitly.
+    // Must come from the frozen Camera layout. The runtime derives it from
+    // the negotiated stride/size_image and passes it explicitly.
     int vertical_stride = 0;
 
     int fps_numerator = 30;
     int fps_denominator = 1;
 
-    // V8.3 common media epoch. When non-zero, MPP input/output PTS is the
+    // Common media epoch. When non-zero, MPP input/output PTS is the
     // capture CLOCK_MONOTONIC timestamp minus this epoch.
     int64_t media_epoch_monotonic_ns = 0;
     int bitrate_bps = 4'000'000;

@@ -1,6 +1,6 @@
 #include "media/mp4_recorder.h"
 
-#include "logging/logger.h"
+#include "observability/logger.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>

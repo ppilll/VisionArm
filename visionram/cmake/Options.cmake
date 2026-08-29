@@ -1,16 +1,11 @@
-option(VISIONARM_BUILD_RUNTIME "Build the RKNN inference pipeline runtime library" ON)
-option(VISIONARM_BUILD_TESTS "Build host-side contract and unit tests" ON)
-option(VISIONARM_BUILD_CAPTURE_TOOLS "Build the V4L2 DMA-BUF board probe" ON)
-option(VISIONARM_BUILD_ACCELERATION_TOOLS "Build RGA preprocess and RKNN I/O benchmark tools" ON)
-option(VISIONARM_ENABLE_OPENCV_PREPROCESS "Build the CPU/OpenCV NV12 letterbox fallback preprocessor" ON)
-option(VISIONARM_ENABLE_RGA_PREPROCESS "Build the real librga DMA-BUF preprocessor" OFF)
-option(VISIONARM_ENABLE_MPP_VIDEO "Build the Rockchip MPP H.265 VideoLease branch" OFF)
+option(VISIONARM_ENABLE_OPENCV_PREPROCESS "Build the CPU/OpenCV NV12 letterbox preprocessor" OFF)
+option(VISIONARM_ENABLE_RGA_PREPROCESS "Build the librga DMA-BUF preprocessor" ON)
+option(VISIONARM_ENABLE_MPP_VIDEO "Build the Rockchip MPP H.265 encoder" ON)
 option(VISIONARM_ENABLE_ALSA_AUDIO "Build the ALSA PCM producer and monotonic audio timeline path" ON)
-option(VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER "Build the FFmpeg native AAC-LC encoder and standalone PCM->AAC probe" OFF)
-option(VISIONARM_ENABLE_FFMPEG_MP4_MUX "Build the FFmpeg libavformat HEVC+AAC MP4 local recorder" OFF)
-option(VISIONARM_ENABLE_FFMPEG_MPEGTS_NETWORK "Build the asynchronous FFmpeg HEVC+AAC MPEG-TS/UDP network sink" OFF)
+option(VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER "Build the FFmpeg native AAC-LC encoder" ON)
+option(VISIONARM_ENABLE_FFMPEG_MP4_MUX "Build the FFmpeg HEVC+AAC MP4 recorder" ON)
+option(VISIONARM_ENABLE_FFMPEG_MPEGTS_NETWORK "Build the asynchronous FFmpeg HEVC+AAC MPEG-TS/UDP sink" ON)
 option(VISIONARM_ENABLE_UART_CONTROL "Build the integrated UART control path" ON)
-option(VISIONARM_BUILD_UART_BOARD_TESTS "Build real RK3588-to-MCU UART motor-control board tests" OFF)
 
 set(VISIONARM_DEFAULT_LOG_LEVEL "INFO" CACHE STRING
     "Compile-time default log level: TRACE, DEBUG, INFO, WARN, ERROR, FATAL, OFF")
@@ -33,12 +28,3 @@ if(VISIONARM_ENABLE_FFMPEG_MPEGTS_NETWORK AND NOT VISIONARM_ENABLE_FFMPEG_AUDIO_
     message(FATAL_ERROR
         "VISIONARM_ENABLE_FFMPEG_MPEGTS_NETWORK requires VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER=ON")
 endif()
-if(VISIONARM_BUILD_UART_BOARD_TESTS AND NOT VISIONARM_ENABLE_UART_CONTROL)
-    message(FATAL_ERROR
-        "VISIONARM_BUILD_UART_BOARD_TESTS requires VISIONARM_ENABLE_UART_CONTROL=ON")
-endif()
-
-function(visionarm_apply_warnings target)
-    target_compile_options(${target} PRIVATE
-        -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
-endfunction()

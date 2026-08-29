@@ -18,8 +18,8 @@ struct LetterboxGeometry {
 // source resolution. For a 16:9 source and a 960x544 model tensor this produces
 // a 960x540 active image with 2 rows of padding at both the top and bottom.
 //
-// The optional stretch mode is retained only for backward compatibility and
-// controlled experiments. Production callers should leave it disabled.
+// The optional stretch mode is reserved for controlled experiments.
+// Production callers should leave it disabled.
 struct ResizeGeometryPolicy {
     bool stretch_matching_source_aspect_ratio = false;
     int source_aspect_width = 16;

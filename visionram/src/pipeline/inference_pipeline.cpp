@@ -1,8 +1,8 @@
 #include "pipeline/inference_pipeline.h"
 
-#include "camera/dmabuf_cpu_sync.h"
+#include "camera/dmabuf.h"
 #include "common/monotonic_clock.h"
-#include "logging/logger.h"
+#include "observability/logger.h"
 
 #include <algorithm>
 #include <exception>

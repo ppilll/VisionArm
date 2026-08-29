@@ -1,8 +1,8 @@
 #pragma once
 
-#include "logging/logger.h"
+#include "observability/logger.h"
 #include "pipeline/inference_pipeline.h"
-#include "report/runtime_report.h"
+#include "observability/runtime_report.h"
 
 #include <cstdint>
 #include <string>

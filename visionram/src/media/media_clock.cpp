@@ -83,7 +83,7 @@ TimedAudioChunk MediaClock::StampAudio(RawAudioChunk chunk) {
         std::lock_guard<std::mutex> lock(mutex_);
         ++snapshot_.audio_timestamp_failures;
         throw std::runtime_error(
-            "ALSA status timestamp is required for V8.3 audio PTS");
+            "ALSA status timestamp is required for audio PTS");
     }
     if (chunk.timing.alsa_status_mono_ns <= 0) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -94,7 +94,7 @@ TimedAudioChunk MediaClock::StampAudio(RawAudioChunk chunk) {
         std::lock_guard<std::mutex> lock(mutex_);
         ++snapshot_.audio_timestamp_failures;
         throw std::runtime_error(
-            "negative ALSA capture delay is unsupported by V8.3 timeline");
+            "negative ALSA capture delay is unsupported by the media timeline");
     }
 
     const std::uint64_t delay_frames =

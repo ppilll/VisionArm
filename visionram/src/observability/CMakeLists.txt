@@ -9,3 +9,9 @@ add_library(visionarm_report STATIC ${PROJECT_SOURCE_DIR}/src/observability/runt
 add_library(visionarm::report ALIAS visionarm_report)
 target_link_libraries(visionarm_report PUBLIC visionarm::contract)
 visionarm_apply_warnings(visionarm_report)
+
+add_library(visionarm_telemetry STATIC ${PROJECT_SOURCE_DIR}/src/observability/telemetry.cpp)
+add_library(visionarm::telemetry ALIAS visionarm_telemetry)
+target_link_libraries(visionarm_telemetry
+    PUBLIC visionarm::contract Threads::Threads)
+visionarm_apply_warnings(visionarm_telemetry)

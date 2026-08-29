@@ -1,6 +1,6 @@
 #include "runtime/runtime_app.h"
 
-#include "camera/v4l2_sensor_controller.h"
+#include "camera/v4l2_camera.h"
 #if defined(VISIONARM_HAS_AUDIO_ENCODE)
 #include "media/ffmpeg_log_control.h"
 #endif

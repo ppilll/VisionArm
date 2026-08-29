@@ -1,23 +1,27 @@
-# Registered by the final integration thread after the legacy runtime target is
-# removed from cmake/LegacyTargets.cmake.  Keeping the complete target recipe
-# next to its sources prevents a second, hand-maintained feature matrix.
 add_library(visionarm_runtime_lib STATIC
     runtime_app.cpp
+    runtime_components.cpp
     runtime_cli.cpp
     runtime_report.cpp)
 add_library(visionarm::runtime ALIAS visionarm_runtime_lib)
 
 target_link_libraries(visionarm_runtime_lib
-    PUBLIC visionarm::pipeline visionarm::logging visionarm::report)
+    PUBLIC
+        visionarm::pipeline
+        visionarm::video
+        visionarm::media
+        visionarm::control
+        visionarm::logging
+        visionarm::report
+        visionarm::telemetry)
 
 if(VISIONARM_ENABLE_UART_CONTROL)
-    target_link_libraries(visionarm_runtime_lib PUBLIC visionarm::uart_adapter)
     target_compile_definitions(visionarm_runtime_lib
         PUBLIC VISIONARM_HAS_UART_CONTROL=1)
 endif()
 if(VISIONARM_ENABLE_ALSA_AUDIO)
     target_link_libraries(visionarm_runtime_lib
-        PUBLIC visionarm::audio_capture visionarm::media)
+        PUBLIC visionarm::audio_capture)
     target_compile_definitions(visionarm_runtime_lib PUBLIC VISIONARM_HAS_ALSA_AUDIO=1)
 endif()
 if(VISIONARM_ENABLE_ALSA_AUDIO AND VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER AND
