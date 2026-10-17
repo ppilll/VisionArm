@@ -1,6 +1,7 @@
 #pragma once
 
 #include "control/uart_protocol.h"
+#include "control/uart_health_projection.h"
 
 #include <cstdint>
 #include <memory>
@@ -163,6 +164,10 @@ public:
     [[nodiscard]] bool RequestClearRemoteStop(
         uint32_t* transaction_id) noexcept;
     [[nodiscard]] bool RequestPing(uint32_t* ping_id) noexcept;
+
+    [[nodiscard]] UartHealthProjection ReadHealthProjection() const noexcept;
+    void AckHealthIssueThrough(uint64_t revision) noexcept;
+    void NoteManagedStartupNotReady() noexcept;
 
     [[nodiscard]] UartModuleSnapshot GetSnapshot() const noexcept;
     [[nodiscard]] UartMetrics GetMetrics() const noexcept;

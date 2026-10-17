@@ -1,0 +1,136 @@
+{
+  "schema": "visionarm.viewer_summary.v1",
+  "started_utc": "2026-08-31T10:39:06.462662+00:00",
+  "ended_utc": "2026-08-31T10:39:25.468006+00:00",
+  "observed_duration_seconds": 19.005222360006883,
+  "stop_reason": "ffplay_exit",
+  "video": {
+    "backend": "ffplay",
+    "url": "udp://0.0.0.0:5000?fifo_size=65536&overrun_nonfatal=0&buffer_size=4194304",
+    "low_latency": true,
+    "framedrop": true,
+    "probesize": 5000000,
+    "analyzeduration": 5000000,
+    "exit_code": 0
+  },
+  "telemetry": {
+    "datagrams_received": 142,
+    "bytes_received": 139609,
+    "valid_datagrams": 142,
+    "parse_errors": 0,
+    "schema_errors": 0,
+    "first_sequence": 1,
+    "last_sequence": 142,
+    "sequence_gaps": 0,
+    "out_of_order": 0,
+    "counter_regressions": 0,
+    "receiver_errors": 0,
+    "observed_duration_seconds": 14.127229299003375,
+    "camera_fps": {
+      "samples": 142,
+      "minimum": 0.0,
+      "maximum": 29.672,
+      "mean": 28.075929577464777,
+      "last": 29.577
+    },
+    "inference_fps": {
+      "samples": 142,
+      "minimum": 0.0,
+      "maximum": 29.6,
+      "mean": 27.894436619718302,
+      "last": 29.577
+    },
+    "capture_to_result_ms": {
+      "samples": 142,
+      "minimum": 0.0,
+      "maximum": 88.159,
+      "mean": 79.17573239436612,
+      "last": 79.042
+    },
+    "result_staleness_ms": {
+      "samples": 142,
+      "minimum": 0.0,
+      "maximum": 91.319,
+      "mean": 66.08072535211268,
+      "last": 38.745
+    },
+    "target_states": {
+      "NO_TARGET": 142
+    },
+    "network_states": {
+      "finalized": 1,
+      "running": 141
+    },
+    "recording_states": {
+      "disabled": 142
+    },
+    "wire_validation": "PASS",
+    "last_error": "",
+    "latest": {
+      "sequence": 142,
+      "sent_monotonic_ns": 103899267425,
+      "pipeline": {
+        "sample_monotonic_ns": 103899204133,
+        "media_epoch_monotonic_ns": 89672113621,
+        "running": false,
+        "fatal_error": false
+      },
+      "camera": {
+        "captured_frames": 419,
+        "fps": 29.577
+      },
+      "inference": {
+        "results": 419,
+        "fps": 29.577
+      },
+      "video": {
+        "frames_encoded": 419
+      },
+      "network": {
+        "state": "finalized",
+        "video_access_units": 419,
+        "audio_packets": 664
+      },
+      "recording": {
+        "state": "disabled",
+        "video_samples": 0,
+        "audio_packets": 0
+      },
+      "target": {
+        "available": true,
+        "state": "NO_TARGET",
+        "valid": false,
+        "confidence": 0.0,
+        "class_id": -1,
+        "bbox": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "source_width": 0,
+        "source_height": 0
+      },
+      "control": {
+        "valid": false,
+        "dx_px": 0.0,
+        "dy_px": 0.0,
+        "error_x_normalized": 0.0,
+        "error_y_normalized": 0.0,
+        "capture_to_result_ms": 79.042,
+        "capture_media_pts_ms": 14109.367,
+        "result_staleness_ms": 38.745,
+        "capture_monotonic_ns": 103781481000,
+        "generated_monotonic_ns": 103860522630,
+        "frame_id": 418,
+        "consecutive_hits": 0,
+        "consecutive_misses": 419
+      }
+    },
+    "bind_address": "0.0.0.0",
+    "port": 5001,
+    "requested_receive_buffer_bytes": 1048576,
+    "actual_receive_buffer_bytes": 425984,
+    "raw_log": null
+  }
+}

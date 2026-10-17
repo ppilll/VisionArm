@@ -65,6 +65,8 @@ struct RuntimeOptions {
     int max_rss_growth_kb = 0;
     float confidence = 0.25F;
     ControlBackend control_backend = ControlBackend::MOCK;
+    std::string runtime_service_socket;
+    std::string runtime_service_name;
     std::string uart_device = "/dev/ttyS3";
     int uart_baud = 115200;
     int uart_ready_timeout_ms = 5000;

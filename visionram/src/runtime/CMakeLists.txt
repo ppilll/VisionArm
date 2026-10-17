@@ -39,6 +39,14 @@ if(VISIONARM_ENABLE_ALSA_AUDIO AND VISIONARM_ENABLE_FFMPEG_AUDIO_ENCODER AND
     target_link_libraries(visionarm_runtime_lib PUBLIC visionarm::media_network)
     target_compile_definitions(visionarm_runtime_lib PUBLIC VISIONARM_HAS_NETWORK_MUX=1)
 endif()
+option(VISIONARM_ENABLE_RUNTIME_SUPERVISION "Enable managed UART health client" ON)
+if(VISIONARM_ENABLE_UART_CONTROL AND VISIONARM_ENABLE_RUNTIME_SUPERVISION)
+    find_package(Threads REQUIRED)
+    target_sources(visionarm_runtime_lib PRIVATE runtime_supervisor_client.cpp)
+    target_link_libraries(visionarm_runtime_lib PUBLIC Threads::Threads)
+    target_compile_definitions(visionarm_runtime_lib
+        PUBLIC VISIONARM_HAS_RUNTIME_SUPERVISION=1)
+endif()
 visionarm_apply_warnings(visionarm_runtime_lib)
 
 add_executable(visionarm_runtime ${PROJECT_SOURCE_DIR}/app/visionarm_runtime_main.cpp)

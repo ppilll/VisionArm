@@ -1,4 +1,7 @@
 #include "runtime/runtime_app.h"
+#if defined(VISIONARM_HAS_RUNTIME_SUPERVISION)
+#include "runtime/runtime_supervisor_client.h"
+#endif
 #include "runtime/runtime_report.h"
 #include "runtime_internal.h"
 
@@ -265,6 +268,24 @@ int visionarm::runtime::detail::RunRuntime(int argc, char** argv) {
     try {
         options = ParseRuntimeOptions(argc, argv);
         options_parsed = true;
+#if defined(VISIONARM_HAS_UART_CONTROL)
+        // Declared before the client: owner outlives its projection reader even
+        // when camera/model initialization throws before UART startup.
+        std::unique_ptr<visionarm::uart::UartLink> uart_link;
+#endif
+#if defined(VISIONARM_HAS_RUNTIME_SUPERVISION)
+        std::unique_ptr<RuntimeSupervisorClient> supervisor_client;
+        if (!options.runtime_service_socket.empty()) {
+            supervisor_client = std::make_unique<RuntimeSupervisorClient>(
+                RuntimeSupervisorConfig{options.runtime_service_socket,
+                                        options.runtime_service_name}, g_stop);
+            supervisor_client->Start();
+        }
+        struct SupervisorShutdownGate {
+            std::unique_ptr<RuntimeSupervisorClient>& client;
+            ~SupervisorShutdownGate() { if (client) client->BeginShutdown(); }
+        };
+#endif
         visionarm::logging::LoggerConfig logger_config;
         std::string logger_error;
         if (!LoadEffectiveLoggerConfig(
@@ -370,8 +391,10 @@ int visionarm::runtime::detail::RunRuntime(int argc, char** argv) {
         std::unique_ptr<visionarm::UdpTelemetrySink> telemetry_sink;
 
 #if defined(VISIONARM_HAS_UART_CONTROL)
-        std::unique_ptr<visionarm::uart::UartLink> uart_link;
         std::unique_ptr<visionarm::UartControlSink> uart_control_sink;
+#if defined(VISIONARM_HAS_RUNTIME_SUPERVISION)
+        SupervisorShutdownGate uart_startup_gate{supervisor_client};
+#endif
         if (options.control_backend == ControlBackend::UART) {
             visionarm::uart::UartLinkConfig uart_config;
             uart_config.device_path = options.uart_device;
@@ -379,6 +402,9 @@ int visionarm::runtime::detail::RunRuntime(int argc, char** argv) {
 
             uart_link =
                 std::make_unique<visionarm::uart::UartLink>(uart_config);
+#if defined(VISIONARM_HAS_RUNTIME_SUPERVISION)
+            if (supervisor_client) supervisor_client->AttachProjection(*uart_link);
+#endif
             std::string uart_error;
             if (!uart_link->Start(&uart_error)) {
                 throw std::runtime_error(
@@ -387,11 +413,21 @@ int visionarm::runtime::detail::RunRuntime(int argc, char** argv) {
             if (!WaitForUartReady(*uart_link, options.uart_ready_timeout_ms)) {
                 const visionarm::uart::UartModuleSnapshot failed =
                     uart_link->GetSnapshot();
-                uart_link->Stop();
-                throw std::runtime_error(
-                    std::string("UART did not reach READY; state=") +
-                    visionarm::uart::LinkStateName(failed.state) +
-                    " last_error=" + failed.last_error);
+                bool managed_timeout = false;
+#if defined(VISIONARM_HAS_RUNTIME_SUPERVISION)
+                managed_timeout = supervisor_client != nullptr &&
+                    failed.state != visionarm::uart::LinkState::FAILED &&
+                    !g_stop.load(std::memory_order_acquire);
+                if (managed_timeout && !g_stop.load(std::memory_order_acquire))
+                    uart_link->NoteManagedStartupNotReady();
+#endif
+                if (!managed_timeout) {
+                    uart_link->Stop();
+                    throw std::runtime_error(
+                        std::string("UART did not reach READY; state=") +
+                        visionarm::uart::LinkStateName(failed.state) +
+                        " last_error=" + failed.last_error);
+                }
             }
 
             uart_control_sink =
@@ -399,7 +435,8 @@ int visionarm::runtime::detail::RunRuntime(int argc, char** argv) {
             selected_control_sink = uart_control_sink.get();
             visionarm::logging::Log(
                 visionarm::logging::LogLevel::INFO, "uart",
-                "link READY device=", options.uart_device,
+                "link state=", visionarm::uart::LinkStateName(uart_link->GetLinkState()),
+                " device=", options.uart_device,
                 " baud=", options.uart_baud);
         }
 #endif
@@ -519,6 +556,9 @@ int visionarm::runtime::detail::RunRuntime(int argc, char** argv) {
         std::unique_ptr<visionarm::FfmpegMpegTsUdpSink> network_muxer;
 #endif
 
+#if defined(VISIONARM_HAS_RUNTIME_SUPERVISION)
+        SupervisorShutdownGate auxiliary_startup_gate{supervisor_client};
+#endif
         if (encoded_audio_enabled) {
             visionarm::logging::Log(
                 visionarm::logging::LogLevel::DEBUG, "runtime",
@@ -702,6 +742,9 @@ int visionarm::runtime::detail::RunRuntime(int argc, char** argv) {
             &state_machine,
             &encoder,
             selected_video_sink);
+#if defined(VISIONARM_HAS_RUNTIME_SUPERVISION)
+        SupervisorShutdownGate supervisor_shutdown_gate{supervisor_client};
+#endif
 
 #if defined(VISIONARM_HAS_ALSA_AUDIO)
         if (options.audio_enabled) {
@@ -851,6 +894,9 @@ int visionarm::runtime::detail::RunRuntime(int argc, char** argv) {
         while (!g_stop.load(std::memory_order_acquire) &&
                std::chrono::steady_clock::now() < deadline &&
                pipeline.running()) {
+#if defined(VISIONARM_HAS_RUNTIME_SUPERVISION)
+            if (supervisor_client) supervisor_client->RethrowWorkerFailure();
+#endif
             if (g_reload_log_config.exchange(
                     false, std::memory_order_acq_rel)) {
                 ReloadLoggerFromSupervisor(options);
@@ -918,6 +964,9 @@ int visionarm::runtime::detail::RunRuntime(int argc, char** argv) {
             g_stop.load(std::memory_order_acquire);
         const double observed_duration_seconds =
             std::chrono::duration<double>(run_end - run_start).count();
+#if defined(VISIONARM_HAS_RUNTIME_SUPERVISION)
+        if (supervisor_client) supervisor_client->BeginShutdown();
+#endif
         pipeline.Stop();
 #if defined(VISIONARM_HAS_ALSA_AUDIO)
         std::optional<visionarm::AudioCaptureWorkerSnapshot> audio_worker_stats;
@@ -1001,6 +1050,13 @@ int visionarm::runtime::detail::RunRuntime(int argc, char** argv) {
             uart_control_stats = uart_control_sink->Snapshot();
             uart_link_stats = uart_link->GetSnapshot();
             uart_link->Stop();
+        }
+#endif
+
+#if defined(VISIONARM_HAS_RUNTIME_SUPERVISION)
+        if (supervisor_client) {
+            supervisor_client->Stop();
+            supervisor_client->RethrowWorkerFailure();
         }
 #endif
 

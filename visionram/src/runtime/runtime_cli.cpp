@@ -74,7 +74,8 @@ const char* ControlBackendName(ControlBackend backend) noexcept {
         << "  [--log-level LEVEL] [--log-module MODULE=LEVEL] \\\n"
         << "  [--log-config PATH] \\\n"
         << "  [--control-backend mock|uart] [--uart-device /dev/ttyS3] \\\n"
-        << "  [--uart-baud 115200] [--uart-ready-timeout-ms 5000]\n";
+        << "  [--uart-baud 115200] [--uart-ready-timeout-ms 5000]\n"
+        << "  [--runtime-service-socket PATH --runtime-service-name NAME]\n";
     throw std::invalid_argument("invalid or incomplete command line");
 }
 
@@ -251,6 +252,14 @@ RuntimeOptions ParseRuntimeOptions(int argc, char** argv) {
                 throw std::invalid_argument(
                     "control backend must be mock or uart");
             }
+        } else if (key == "--runtime-service-socket") {
+            options.runtime_service_socket = next();
+            if (options.runtime_service_socket.empty())
+                throw std::invalid_argument("runtime service socket must not be empty");
+        } else if (key == "--runtime-service-name") {
+            options.runtime_service_name = next();
+            if (options.runtime_service_name.empty())
+                throw std::invalid_argument("runtime service name must not be empty");
         } else if (key == "--uart-device") {
             options.uart_device = next();
         } else if (key == "--uart-baud") {
@@ -279,6 +288,16 @@ RuntimeOptions ParseRuntimeOptions(int argc, char** argv) {
         options.height <= 0 || options.fps <= 0 ||
         options.bitrate <= 0 || options.gop <= 0) {
         Usage(argv[0]);
+    }
+    if (options.runtime_service_socket.empty() != options.runtime_service_name.empty()) {
+        throw std::invalid_argument("runtime service socket/name must be supplied together");
+    }
+    if (!options.runtime_service_socket.empty()) {
+        if (options.control_backend != ControlBackend::UART)
+            throw std::invalid_argument("managed mode requires UART control backend");
+#if !defined(VISIONARM_HAS_UART_CONTROL) || !defined(VISIONARM_HAS_RUNTIME_SUPERVISION)
+        throw std::invalid_argument("managed mode was not enabled in this binary");
+#endif
     }
     ValidateCameraMode(options);
     if (options.sensor_subdev.empty()) {

@@ -295,6 +295,28 @@ public:
         return true;
     }
 
+    UartHealthProjection ReadHealthProjection() const noexcept {
+        std::lock_guard<std::mutex> lock(snapshot_mutex_);
+        return health_.Read();
+    }
+
+    void AckHealthIssueThrough(uint64_t revision) noexcept {
+        std::lock_guard<std::mutex> lock(snapshot_mutex_);
+        health_.AckThrough(revision);
+    }
+
+    void NoteManagedStartupNotReady() noexcept {
+        std::lock_guard<std::mutex> lock(snapshot_mutex_);
+        // Budget was decided by the existing product readiness wait. Recheck
+        // READY under the owner lock to avoid publishing a stale timeout.
+        if (snapshot_.state != LinkState::READY &&
+            snapshot_.state != LinkState::STOPPING &&
+            snapshot_.state != LinkState::CLOSED) {
+            health_.Record(HealthStatus::UNHEALTHY,
+                           HealthReason::startup_not_ready, confirmed_boot_);
+        }
+    }
+
     UartModuleSnapshot GetSnapshot() const noexcept {
         std::lock_guard<std::mutex> lock(snapshot_mutex_);
         return snapshot_;
@@ -370,7 +392,72 @@ private:
 
     void SetState(LinkState state) noexcept {
         std::lock_guard<std::mutex> lock(snapshot_mutex_);
+        const LinkState previous = snapshot_.state;
         snapshot_.state = state;
+        const auto current = health_.Read().current;
+        switch (state) {
+            case LinkState::OPENING:
+            case LinkState::NEGOTIATING: {
+                // Adverse episodes survive reopen/renegotiation until owner READY.
+                const auto status = current.status == HealthStatus::UNHEALTHY ||
+                    current.status == HealthStatus::DEGRADED ? current.status :
+                    HealthStatus::CONNECTING;
+                health_.Record(status, current.reason == HealthReason::peer_reboot ?
+                    HealthReason::peer_reboot : (state == LinkState::OPENING ?
+                    HealthReason::opening : HealthReason::negotiating),
+                    confirmed_boot_, state == LinkState::NEGOTIATING &&
+                    (previous == LinkState::OPENING || previous == LinkState::LINK_LOST));
+                break;
+            }
+            case LinkState::READY:
+                health_.Record(HealthStatus::HEALTHY,
+                    health_ever_ready_ && current.status != HealthStatus::HEALTHY ?
+                    HealthReason::recovered : (current.status == HealthStatus::HEALTHY ?
+                    current.reason : HealthReason::ready),
+                    confirmed_boot_);
+                health_ever_ready_ = true;
+                break;
+            case LinkState::DEGRADED:
+                health_.Record(current.status == HealthStatus::UNHEALTHY ?
+                    HealthStatus::UNHEALTHY : HealthStatus::DEGRADED,
+                    current.status == HealthStatus::UNHEALTHY ? current.reason :
+                    HealthReason::response_timeout, confirmed_boot_);
+                break;
+            case LinkState::LINK_LOST:
+                health_.Record(HealthStatus::UNHEALTHY, HealthReason::link_lost,
+                               confirmed_boot_);
+                break;
+            case LinkState::FAILED:
+                health_.Record(HealthStatus::UNHEALTHY, HealthReason::owner_stopped,
+                               confirmed_boot_);
+                break;
+            case LinkState::CLOSED:
+            case LinkState::STOPPING:
+                // Ordered shutdown is gated by the client before link.Stop().
+                break;
+        }
+    }
+
+    void ObserveConfirmedBoot() noexcept {
+        std::lock_guard<std::mutex> lock(snapshot_mutex_);
+        if (!snapshot_.peer_boot_id_valid) return;
+        const uint32_t boot = snapshot_.peer_boot_id;
+        if (confirmed_boot_ && *confirmed_boot_ != boot) {
+            const auto current = health_.Read().current;
+            health_.Record(current.status == HealthStatus::UNHEALTHY ?
+                HealthStatus::UNHEALTHY : HealthStatus::DEGRADED,
+                HealthReason::peer_reboot, boot);
+        }
+        // Same ID establishes evidence only; it cannot prove absence of reboot.
+        confirmed_boot_ = boot;
+    }
+
+    void NotePeerRenegotiation() noexcept {
+        std::lock_guard<std::mutex> lock(snapshot_mutex_);
+        const auto current = health_.Read().current;
+        health_.Record(current.status == HealthStatus::UNHEALTHY ?
+            HealthStatus::UNHEALTHY : HealthStatus::DEGRADED,
+            HealthReason::peer_reboot, confirmed_boot_, true);
     }
 
     void SetLastError(std::string error) noexcept {
@@ -446,6 +533,11 @@ private:
                     }
                     ever_opened_ = true;
                 } else {
+                    {
+                        std::lock_guard<std::mutex> lock(snapshot_mutex_);
+                        health_.Record(HealthStatus::UNHEALTHY,
+                                       HealthReason::open_failed, confirmed_boot_);
+                    }
                     SetLastError(error);
                     next_open_ms = now_ms + config_.open_retry_ms;
                 }
@@ -718,6 +810,7 @@ private:
             }
         }
         if (boot_changed) {
+            NotePeerRenegotiation();
             ClearWait();
             tx_.reset();
             FailOutstandingReliable();
@@ -759,6 +852,12 @@ private:
     }
 
     void HandleHelloAck(const HelloAck& ack, uint64_t now_ms) noexcept {
+        if (wait_.kind == ResponseKind::HELLO_ACK &&
+            ack.hello_wire_sequence == wait_.expected_id && ack.accepted == 0U) {
+            std::lock_guard<std::mutex> lock(snapshot_mutex_);
+            health_.Record(HealthStatus::UNHEALTHY,
+                           HealthReason::hello_rejected, confirmed_boot_);
+        }
         if (wait_.kind != ResponseKind::HELLO_ACK ||
             ack.hello_wire_sequence != wait_.expected_id ||
             ack.accepted == 0U ||
@@ -769,6 +868,7 @@ private:
             return;
         }
         ClearWait();
+        ObserveConfirmedBoot();
         SetState(LinkState::READY);
         {
             std::lock_guard<std::mutex> lock(snapshot_mutex_);
@@ -1194,6 +1294,9 @@ private:
     mutable std::mutex snapshot_mutex_;
     mutable std::mutex request_mutex_;
     UartModuleSnapshot snapshot_;
+    UartHealthRecord health_;
+    std::optional<uint32_t> confirmed_boot_;
+    bool health_ever_ready_ = false;
     std::optional<PendingReliableRequest> pending_reliable_;
     bool reliable_busy_ = false;
     bool ping_pending_ = false;
@@ -1240,6 +1343,18 @@ bool UartLink::RequestClearRemoteStop(uint32_t* transaction_id) noexcept {
 
 bool UartLink::RequestPing(uint32_t* ping_id) noexcept {
     return impl_->RequestPing(ping_id);
+}
+
+UartHealthProjection UartLink::ReadHealthProjection() const noexcept {
+    return impl_->ReadHealthProjection();
+}
+
+void UartLink::AckHealthIssueThrough(uint64_t revision) noexcept {
+    impl_->AckHealthIssueThrough(revision);
+}
+
+void UartLink::NoteManagedStartupNotReady() noexcept {
+    impl_->NoteManagedStartupNotReady();
 }
 
 UartModuleSnapshot UartLink::GetSnapshot() const noexcept {
